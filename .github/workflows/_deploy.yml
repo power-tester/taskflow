@@ -76,11 +76,13 @@ jobs:
           else
             echo "Deploying from source for taskflow-server-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
           fi
+          # --detach is intentionally omitted: railway up blocks until Railway confirms
+          # the new deployment is live, so the health check below is guaranteed to test
+          # the new instance rather than the still-running old one.
           npx --yes @railway/cli@latest up \
             --service taskflow-server-${{ inputs.railway_env }} \
-            --environment ${{ inputs.railway_env }} \
-            --detach
-          echo "Server deploy triggered."
+            --environment ${{ inputs.railway_env }}
+          echo "Server deploy complete."
 
       - name: Deploy client to Railway
         env:
@@ -102,17 +104,18 @@ jobs:
           else
             echo "Deploying from source for taskflow-client-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
           fi
+          # --detach is intentionally omitted: see server deploy step above.
           npx --yes @railway/cli@latest up \
             --service taskflow-client-${{ inputs.railway_env }} \
-            --environment ${{ inputs.railway_env }} \
-            --detach
-          echo "Client deploy triggered."
+            --environment ${{ inputs.railway_env }}
+          echo "Client deploy complete."
 
       - name: Health check (server)
         run: |
-          echo "Waiting 15 seconds for Railway to build and start the container..."
-          sleep 15
-          DEADLINE=$(( $(date +%s) + 180 ))  # poll for up to 3 more minutes (4 min total)
+          # railway up (without --detach) already confirmed the new deployment is live.
+          # This step is a final HTTP smoke test to verify the endpoint is reachable
+          # from the GitHub Actions runner and returns a healthy response.
+          DEADLINE=$(( $(date +%s) + 60 ))  # allow up to 1 minute for DNS/LB propagation
           INTERVAL=5
           BASE_URL="${{ vars.SERVER_URL }}"
           BASE_URL="${BASE_URL%/}"  # strip any trailing slash
@@ -124,7 +127,7 @@ jobs:
               exit 0
             fi
             if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-              echo "❌ Health check timed out after 4 minutes — last status: $STATUS"
+              echo "❌ Health check timed out — last status: $STATUS"
               exit 1
             fi
             sleep $INTERVAL
