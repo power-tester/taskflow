@@ -270,9 +270,9 @@ After the first `build-image.yml` run, go to `https://github.com/<owner>?tab=pac
 
 1. Create a GitHub PAT: `https://github.com/settings/tokens` → **Generate new token (classic)** → tick only **`read:packages`**
 2. In Railway: project → **Settings** → **Registry Credentials** → **Add Credentials**
-   - Registry: `ghcr.io`
-   - Username: `pramodkumaryadav` (lowercase)
-   - Password: the PAT from step 1
+  - Registry: `ghcr.io`
+  - Username: `<owner>` (lowercase; the GitHub org/user that owns the packages)
+  - Password: the PAT from step 1
 3. Ensure GitHub Actions has write access: repo → **Settings** → **Actions** → **General** → **Read and write permissions**
 
 #### How to trigger an image deploy
