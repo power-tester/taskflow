@@ -201,36 +201,29 @@ jobs:
               end) + map(select(.tag != $newtag))
              | .[0:10]')
 
-          # Options dropdown:
-          #   sha- tags (newest first, NEW_TAG guaranteed first) → "latest" → sentinel
-          OPTIONS_JSON=$(echo "$BASE" | jq -c '[.[].tag] + ["latest", "(build from source)"]')
-
-          # Human-readable hint injected into the description field so users
-          # can see tag ages directly in the "Run workflow" UI.
-          DATES_HINT=$(echo "$BASE" | jq -r '[.[] | "\(.tag) (\(.date))"] | join(", ")')
+          # Options dropdown: tags shown as "sha-abc1234 (2026-06-06)" so engineers
+          # can see the push date at a glance; the date suffix is stripped in _deploy.yml
+          # before the tag is used to pull the image.
+          OPTIONS_JSON=$(echo "$BASE" | jq -c '[.[] | "\(.tag) (\(.date))"] + ["latest", "(build from source)"]')
 
           echo "options_json=${OPTIONS_JSON}" >> $GITHUB_OUTPUT
           echo "new_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
-          echo "dates_hint=${DATES_HINT}" >> $GITHUB_OUTPUT
 
       - name: Patch image_tag input to type:choice in deploy workflows
         run: |
-          NEW_TAG="${{ steps.fetch_tags.outputs.new_tag }}"
-
           # Write options to a temp file so yq can load them as a YAML sequence.
           echo '${{ steps.fetch_tags.outputs.options_json }}' > /tmp/opts.json
 
-          HINT="${{ steps.fetch_tags.outputs.dates_hint }}"
-          DESCRIPTION="Pre-built image tag to deploy. Recent tags (newest first): ${HINT}. Pick 'latest' for the most recent build, or '(build from source)' to build from source."
+          # Avoid "key: value" patterns in the description — yq stores them as a YAML
+          # mapping instead of a plain string, causing the GitHub UI to display JSON.
+          DESCRIPTION="Pre-built image tag to deploy. Format is sha-<short-sha> (push date). Pick 'latest' for the most recent build, or '(build from source)' to build from source."
 
           for FILE in \
             .github/workflows/deploy-staging.yml \
             .github/workflows/deploy-production.yml; do
             yq -i '.on.workflow_dispatch.inputs.image_tag.type = "choice"' "$FILE"
-            yq -i ".on.workflow_dispatch.inputs.image_tag.default = \"${NEW_TAG}\"" "$FILE"
+            yq -i '.on.workflow_dispatch.inputs.image_tag.default = "latest"' "$FILE"
             yq -i '.on.workflow_dispatch.inputs.image_tag.options = load("/tmp/opts.json")' "$FILE"
-            # Inject the dates hint into the description so it appears in the
-            # "Run workflow" sidebar alongside the dropdown.
             DESCRIPTION="$DESCRIPTION" yq -i '.on.workflow_dispatch.inputs.image_tag.description = env(DESCRIPTION)' "$FILE"
           done
 
