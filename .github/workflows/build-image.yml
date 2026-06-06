@@ -25,7 +25,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write # write needed so the update-deploy-options job can commit workflow changes
   packages: write # needed to push to ghcr.io
 
 jobs:
@@ -97,7 +97,89 @@ jobs:
           echo "| \`ghcr.io/${OWNER}/taskflow-server\` | \`${TAG}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${OWNER}/taskflow-client\` | \`${TAG}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "To deploy these images, dispatch **deploy-staging.yml** or **deploy-production.yml** with:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "image_tag: ${TAG}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "The deploy workflow option lists will be updated automatically by the next job." >> $GITHUB_STEP_SUMMARY
+
+  # After images are pushed, refresh the image_tag dropdown options in the two
+  # manual deploy workflows so engineers always see an up-to-date list of tags.
+  update-deploy-options:
+    name: Refresh image_tag options in deploy workflows
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the updated workflow files back to main
+      packages: read  # read GHCR package metadata to list available tags
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # GITHUB_TOKEN is sufficient here; pushes made with it do NOT re-trigger
+          # push-triggered workflows, so there is no risk of an infinite build loop.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install yq (mikefarah v4)
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Fetch all available sha- tags from GHCR
+        id: fetch_tags
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          NEW_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+
+          # Query GHCR for all published versions of taskflow-server.
+          # Both images (server + client) share the same sha- tags, so one query suffices.
+          # --fail-with-body makes curl exit non-zero on HTTP 4xx/5xx so build failures
+          # are not silently swallowed and mistakenly treated as an empty tag list.
+          RAW=$(curl --fail-with-body -sS \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${OWNER}/packages/container/taskflow-server/versions?per_page=100")
+
+          # Build the options array:
+          #   1. newly built tag first (guaranteed present even before API propagates)
+          #   2. any other existing sha- tags sorted newest-first (sort_by .created_at),
+          #      with .created_at referenced directly — not via recursive descent
+          #   3. a sentinel "build from source" entry so engineers can still trigger source builds
+          OPTIONS_JSON=$(echo "$RAW" | jq -c \
+            --arg newtag "$NEW_TAG" \
+            'sort_by(.created_at) | reverse
+             | [ .[] | .metadata.container.tags[] | select(startswith("sha-")) ]
+             | [$newtag] + map(select(. != $newtag))
+             | .[0:10]
+             | . + ["(build from source)"]')
+
+          echo "options_json=${OPTIONS_JSON}" >> $GITHUB_OUTPUT
+          echo "new_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Patch image_tag input to type:choice in deploy workflows
+        run: |
+          NEW_TAG="${{ steps.fetch_tags.outputs.new_tag }}"
+
+          # Write options to a temp file so yq can load them as a YAML sequence.
+          echo '${{ steps.fetch_tags.outputs.options_json }}' > /tmp/opts.json
+
+          for FILE in \
+            .github/workflows/deploy-staging.yml \
+            .github/workflows/deploy-production.yml; do
+            yq -i '.on.workflow_dispatch.inputs.image_tag.type = "choice"' "$FILE"
+            yq -i ".on.workflow_dispatch.inputs.image_tag.default = \"${NEW_TAG}\"" "$FILE"
+            yq -i '.on.workflow_dispatch.inputs.image_tag.options = load("/tmp/opts.json")' "$FILE"
+          done
+
+      - name: Commit and push updated deploy workflows
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/deploy-staging.yml \
+            .github/workflows/deploy-production.yml
+          if git diff --staged --quiet; then
+            echo "No changes — image_tag options already up to date."
+          else
+            git commit -m "chore: refresh deploy image_tag options [skip ci]"
+            git push
+          fi
