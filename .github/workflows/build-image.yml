@@ -107,16 +107,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the updated workflow files back to main
-      packages: read  # read GHCR package metadata to list available tags
+      packages: read # read GHCR package metadata to list available tags
 
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
-          # GITHUB_TOKEN is sufficient here; pushes made with it do NOT re-trigger
-          # push-triggered workflows, so there is no risk of an infinite build loop.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # WORKFLOW_PAT is a fine-grained PAT with Contents + Workflows (read & write)
+          # scopes. GITHUB_TOKEN cannot modify .github/workflows/** files — GitHub
+          # blocks that regardless of the permissions: block — so a PAT is required.
+          # The PAT owner must also be added to the branch protection bypass list so
+          # the direct push to main is allowed without going through a PR.
+          token: ${{ secrets.WORKFLOW_PAT }}
 
       - name: Install yq (mikefarah v4)
         run: |
