@@ -264,7 +264,7 @@ Merge to main
 
 **Option A — Make packages public (simplest)**
 
-After the first `build-image.yml` run, go to `https://github.com/PramodKumarYadav?tab=packages`, open each package (`taskflow-server`, `taskflow-client`) → **Package settings** → **Change visibility → Public**. The images contain no secrets (all secrets come from `DOTENV_KEY` at runtime), so public visibility is safe.
+After the first `build-image.yml` run, go to `https://github.com/<owner>?tab=packages`, open each package (`taskflow-server`, `taskflow-client`) → **Package settings** → **Change visibility → Public**. Before making images public, confirm your Dockerfiles don’t bake plaintext secrets into the image (in this repo the server image includes an encrypted `.env.vault`, and secrets are unlocked at runtime via `DOTENV_KEY`).
 
 **Option B — Keep packages private + add Railway registry credentials**
 
