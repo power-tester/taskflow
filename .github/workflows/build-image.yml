@@ -132,8 +132,8 @@ jobs:
     if: needs.build-and-push.outputs.already_built != 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read   # actions/create-github-app-token only needs read on contents
-      packages: read   # read GHCR package metadata to list available tags
+      contents: read # actions/create-github-app-token only needs read on contents
+      packages: read # read GHCR package metadata to list available tags
 
     steps:
       - name: Generate GitHub App token
