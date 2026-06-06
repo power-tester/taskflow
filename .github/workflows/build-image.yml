@@ -64,13 +64,15 @@ jobs:
         run: |
           OWNER="${{ steps.meta.outputs.owner }}"
           TAG="${{ steps.meta.outputs.tag }}"
-          # docker manifest inspect exits 0 if the manifest exists, non-zero otherwise.
-          # We use the already-authenticated Docker daemon (logged in by the prior step).
-          if docker manifest inspect "ghcr.io/${OWNER}/taskflow-server:${TAG}" > /dev/null 2>&1; then
-            echo "Image ${TAG} already exists in GHCR — skipping build."
+          # Only skip the full build when BOTH server AND client tags are present.
+          # If a previous run pushed server but failed before pushing client, we must
+          # rebuild both to avoid deploying a mismatched pair.
+          if docker manifest inspect "ghcr.io/${OWNER}/taskflow-server:${TAG}" > /dev/null 2>&1 && \
+             docker manifest inspect "ghcr.io/${OWNER}/taskflow-client:${TAG}" > /dev/null 2>&1; then
+            echo "Both images for ${TAG} already exist in GHCR — skipping build."
             echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Image ${TAG} not found — proceeding with build."
+            echo "One or both images for ${TAG} not found — proceeding with build."
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
@@ -130,20 +132,31 @@ jobs:
     if: needs.build-and-push.outputs.already_built != 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # commit the updated workflow files back to main
-      packages: read # read GHCR package metadata to list available tags
+      contents: read   # actions/create-github-app-token only needs read on contents
+      packages: read   # read GHCR package metadata to list available tags
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          # Store the App ID as a repository variable (Settings → Variables → Actions).
+          app-id: ${{ vars.WORKFLOW_APP_ID }}
+          # Store the private key PEM as a repository secret (Settings → Secrets → Actions).
+          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+        # The action mints a short-lived installation token (expires in 1 h).
+        # The token is scoped to this repository and inherits only the permissions
+        # granted to the GitHub App installation (Contents: write, Workflows: write).
+        # See docs/GITHUB_APP_SERVICE_TOKEN.md for setup instructions and rationale.
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
-          # WORKFLOW_PAT is a fine-grained PAT with Contents + Workflows (read & write)
-          # scopes. GITHUB_TOKEN cannot modify .github/workflows/** files — GitHub
-          # blocks that regardless of the permissions: block — so a PAT is required.
-          # The PAT owner must also be added to the branch protection bypass list so
-          # the direct push to main is allowed without going through a PR.
-          token: ${{ secrets.WORKFLOW_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
+        # Loop-avoidance: pushes made with an App token can re-trigger push workflows,
+        # but the commit message includes "[skip ci]" which tells GitHub Actions to
+        # skip workflow runs for that push.
 
       - name: Install yq (mikefarah v4)
         run: |
@@ -166,24 +179,35 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/users/${OWNER}/packages/container/taskflow-server/versions?per_page=100")
 
-          # Build {tag, date} objects sorted newest-first, new tag always first.
+          # Build {tag, date} objects sorted newest-first from GHCR API response.
           TAGGED_OBJS=$(echo "$RAW" | jq -c \
-            --arg newtag "$NEW_TAG" \
             'sort_by(.created_at) | reverse
              | [ .[] | select(.metadata.container.tags | map(startswith("sha-")) | any)
                | { tag: (.metadata.container.tags[] | select(startswith("sha-"))),
                    date: .created_at[0:10] } ]
-             | unique_by(.tag)
-             | (map(select(.tag == $newtag)) + map(select(.tag != $newtag)))
+             | unique_by(.tag)')
+
+          # Always force NEW_TAG to be first in the options — the GHCR API may not have
+          # propagated it yet immediately after the push (eventual consistency).
+          # Without this, the type:choice default would not be present in options,
+          # causing manual workflow dispatch to fail.
+          TODAY=$(date -u +%F)
+          BASE=$(echo "$TAGGED_OBJS" | jq -c \
+            --arg newtag "$NEW_TAG" \
+            --arg today "$TODAY" \
+            '(if map(select(.tag == $newtag)) | length == 0
+              then [{ tag: $newtag, date: $today }]
+              else []
+              end) + map(select(.tag != $newtag))
              | .[0:10]')
 
           # Options dropdown:
-          #   sha- tags (newest first) → "latest" → "(build from source)" sentinel
-          OPTIONS_JSON=$(echo "$TAGGED_OBJS" | jq -c '[.[].tag] + ["latest", "(build from source)"]')
+          #   sha- tags (newest first, NEW_TAG guaranteed first) → "latest" → sentinel
+          OPTIONS_JSON=$(echo "$BASE" | jq -c '[.[].tag] + ["latest", "(build from source)"]')
 
           # Human-readable hint injected into the description field so users
           # can see tag ages directly in the "Run workflow" UI.
-          DATES_HINT=$(echo "$TAGGED_OBJS" | jq -r '[.[] | "\(.tag) (\(.date))"] | join(", ")')
+          DATES_HINT=$(echo "$BASE" | jq -r '[.[] | "\(.tag) (\(.date))"] | join(", ")')
 
           echo "options_json=${OPTIONS_JSON}" >> $GITHUB_OUTPUT
           echo "new_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
@@ -212,8 +236,8 @@ jobs:
 
       - name: Commit and push updated deploy workflows
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "power-tester-ci[bot]"
+          git config user.email "power-tester-ci[bot]@users.noreply.github.com"
           git add \
             .github/workflows/deploy-staging.yml \
             .github/workflows/deploy-production.yml
