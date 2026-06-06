@@ -61,10 +61,14 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-server:${{ inputs.image_tag }} → ${{ inputs.railway_env }}..."
+          IMAGE_TAG='${{ inputs.image_tag }}'
+          if [ -n "$IMAGE_TAG" ]; then
+            if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+              echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
+            fi
+            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG} → ${{ inputs.railway_env }}..."
             DEPLOY_DIR=$(mktemp -d)
-            echo "FROM ghcr.io/${OWNER}/taskflow-server:${{ inputs.image_tag }}" > "$DEPLOY_DIR/Dockerfile"
+            echo "FROM ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG}" > "$DEPLOY_DIR/Dockerfile"
             cd "$DEPLOY_DIR"
           else
             echo "Deploying from source for taskflow-server-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
