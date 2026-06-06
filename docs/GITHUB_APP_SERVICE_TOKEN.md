@@ -8,7 +8,7 @@ every successful image build, patches the `image_tag` dropdown options in
 directly to `main`.
 
 Committing to files under `.github/workflows/**` requires a token with the
-`workflows` scope. GitHub's built-in `GITHUB_TOKEN` explicitly **cannot** be
+`workflows` scope. GitHub's built-in `GITHUB_TOKEN` explicitly __cannot__ be
 granted this scope from within a workflow — it is a hard platform restriction
 regardless of what is in the `permissions:` block.
 
@@ -130,7 +130,7 @@ Settings → Secrets → Actions.
 
 `WORKFLOW_APP_ID` stored as an org-level variable, `WORKFLOW_APP_PRIVATE_KEY`
 stored as an org-level secret, both scoped to the repositories that need them
-(Settings → Secrets and variables → Actions at the org level → **Selected repositories**).
+(Settings → Secrets and variables → Actions at the org level → __Selected repositories__).
 
 **Why we chose it:**
 
@@ -171,15 +171,19 @@ repository. That token is then used by `actions/checkout` and by the subsequent
 
 ### 1 — Create the GitHub App at org level
 
-1. Go to `github.com/organizations/<your-org>/settings/Developer Setting/GitHub Apps`
+1. Go to `https://github.com/organizations/<your-org>/settings/Developer Setting/GitHub Apps`
 2. Click **New GitHub App**
 3. Fill in:
+
    - **App name**: e.g. `<org>-workflow-updater`
    - **Homepage URL**: your org URL, e.g. `https://github.com/<your-org>` — since the App is owned by and serves the whole org, not a single repo
    - **Webhook**: uncheck "Active" (not needed)
+
 4. Under **Repository permissions**, set:
+
    - **Contents** → `Read and write`
    - **Workflows** → `Read and write`
+
 5. Set **Where can this GitHub App be installed?** → `Only on this account`
 6. Click **Create GitHub App**
 

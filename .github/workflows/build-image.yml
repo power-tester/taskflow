@@ -140,9 +140,9 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          # Store the App ID as a repository variable (Settings → Variables → Actions).
+          # Store the App ID as an org-level Actions variable scoped to selected repositories.
           app-id: ${{ vars.WORKFLOW_APP_ID }}
-          # Store the private key PEM as a repository secret (Settings → Secrets → Actions).
+          # Store the private key PEM as an org-level Actions secret scoped to selected repositories.
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
         # The action mints a short-lived installation token (expires in 1 h).
         # The token is scoped to this repository and inherits only the permissions
@@ -195,10 +195,11 @@ jobs:
           BASE=$(echo "$TAGGED_OBJS" | jq -c \
             --arg newtag "$NEW_TAG" \
             --arg today "$TODAY" \
-            '(if map(select(.tag == $newtag)) | length == 0
-              then [{ tag: $newtag, date: $today }]
-              else []
-              end) + map(select(.tag != $newtag))
+            '(
+               (map(select(.tag == $newtag))
+                | if length == 0 then [{ tag: $newtag, date: $today }] else . end)
+               + map(select(.tag != $newtag))
+             )
              | .[0:10]')
 
           # Options dropdown: tags shown as "sha-abc1234 (2026-06-06)" so engineers
