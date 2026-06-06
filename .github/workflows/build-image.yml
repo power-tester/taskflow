@@ -35,6 +35,7 @@ jobs:
 
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
+      already_built: ${{ steps.check_existing.outputs.exists }}
 
     steps:
       - name: Checkout
@@ -58,7 +59,23 @@ jobs:
           echo "tag=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "owner=${OWNER}" >> $GITHUB_OUTPUT
 
+      - name: Check if image tag already exists in GHCR
+        id: check_existing
+        run: |
+          OWNER="${{ steps.meta.outputs.owner }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          # docker manifest inspect exits 0 if the manifest exists, non-zero otherwise.
+          # We use the already-authenticated Docker daemon (logged in by the prior step).
+          if docker manifest inspect "ghcr.io/${OWNER}/taskflow-server:${TAG}" > /dev/null 2>&1; then
+            echo "Image ${TAG} already exists in GHCR — skipping build."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Image ${TAG} not found — proceeding with build."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build & push server image
+        if: steps.check_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -72,6 +89,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build & push client image
+        if: steps.check_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -90,7 +108,11 @@ jobs:
         run: |
           OWNER="${{ steps.meta.outputs.owner }}"
           TAG="${{ steps.meta.outputs.tag }}"
-          echo "## Docker Images Published" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check_existing.outputs.exists }}" = "true" ]; then
+            echo "## Docker Images Already Published (skipped rebuild)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Docker Images Published" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
@@ -104,6 +126,8 @@ jobs:
   update-deploy-options:
     name: Refresh image_tag options in deploy workflows
     needs: build-and-push
+    # Skip if the image was already present — the options list won't have changed.
+    if: needs.build-and-push.outputs.already_built != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the updated workflow files back to main
