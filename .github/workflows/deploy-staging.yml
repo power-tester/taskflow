@@ -9,6 +9,10 @@ on:
         description: Commit SHA to deploy (defaults to HEAD of main)
         required: false
         default: ''
+      image_tag:
+        description: 'Pre-built image tag to deploy (e.g. sha-abc1234, from build-image.yml). Leave blank to build from source.'
+        required: false
+        default: ''
 
 permissions:
   pull-requests: write
@@ -38,6 +42,7 @@ jobs:
       environment: staging
       railway_env: staging
       sha: ${{ needs.checkout-sha.outputs.sha }}
+      image_tag: ${{ inputs.image_tag }}
     secrets:
       # Set in GitHub → Settings → Environments → staging → Secrets
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

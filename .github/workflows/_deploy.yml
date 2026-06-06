@@ -24,6 +24,14 @@ on:
         required: false
         type: string
         default: ''
+      image_tag:
+        description: |
+          Pre-built image tag from GHCR (e.g. sha-abc1234) produced by build-image.yml.
+          When set, Railway deploys from the pre-built image instead of building from source.
+          Leave blank to use the default source-build behaviour.
+        required: false
+        type: string
+        default: ''
     secrets:
       RAILWAY_TOKEN:
         description: Railway project token (Settings → Tokens in Railway dashboard)
@@ -42,14 +50,29 @@ jobs:
           ref: ${{ inputs.sha || github.ref }}
           fetch-depth: 0
 
-      # Railway builds the Docker image itself via the Dockerfile.
-      # No local build step is needed — we just trigger the deploy.
+      # Deployment mode:
+      #   image_tag set  → deploy from a pre-built GHCR image (produced by build-image.yml).
+      #                    A temporary directory with a minimal FROM-only Dockerfile is created
+      #                    so Railway pulls the image rather than building from source.
+      #   image_tag blank → Railway builds the Docker image itself via the Dockerfile (default).
 
       - name: Deploy server to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          echo "Triggering Railway deploy for taskflow-server-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG='${{ inputs.image_tag }}'
+          if [ -n "$IMAGE_TAG" ]; then
+            if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+              echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
+            fi
+            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG} → ${{ inputs.railway_env }}..."
+            DEPLOY_DIR=$(mktemp -d)
+            echo "FROM ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG}" > "$DEPLOY_DIR/Dockerfile"
+            cd "$DEPLOY_DIR"
+          else
+            echo "Deploying from source for taskflow-server-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
+          fi
           npx --yes @railway/cli@latest up \
             --service taskflow-server-${{ inputs.railway_env }} \
             --environment ${{ inputs.railway_env }} \
@@ -60,7 +83,19 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          echo "Triggering Railway deploy for taskflow-client-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG='${{ inputs.image_tag }}'
+          if [ -n "$IMAGE_TAG" ]; then
+            if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+              echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
+            fi
+            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-client:${IMAGE_TAG} → ${{ inputs.railway_env }}..."
+            DEPLOY_DIR=$(mktemp -d)
+            echo "FROM ghcr.io/${OWNER}/taskflow-client:${IMAGE_TAG}" > "$DEPLOY_DIR/Dockerfile"
+            cd "$DEPLOY_DIR"
+          else
+            echo "Deploying from source for taskflow-client-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
+          fi
           npx --yes @railway/cli@latest up \
             --service taskflow-client-${{ inputs.railway_env }} \
             --environment ${{ inputs.railway_env }} \
@@ -97,7 +132,8 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Railway env** | ${{ inputs.railway_env }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | ${{ inputs.sha || github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image tag** | ${{ inputs.image_tag || '(built from source)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Triggered by** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Client URL** | ${{ vars.CLIENT_URL }} |" >> $GITHUB_STEP_SUMMARY
 

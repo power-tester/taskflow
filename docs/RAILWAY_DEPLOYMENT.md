@@ -212,8 +212,89 @@ For each environment, add the following under **Variables**:
 | Workflow | How to trigger | What it does |
 |---|---|---|
 | `deploy-ci.yml` | Automatic — every push to `main` | Deploys both services to Railway `ci` environment |
-| `deploy-staging.yml` | Manual — Actions tab → Run workflow (optionally provide a SHA) | Deploys to Railway `staging`, then comments on the associated PR |
+| `deploy-staging.yml` | Manual — Actions tab → Run workflow (optionally provide a SHA or image tag) | Deploys to Railway `staging`, then comments on the associated PR |
 | `deploy-production.yml` | Manual — Actions tab → Run workflow → waits for reviewer approval | Deploys to Railway `production`, then creates a GitHub Release |
+
+---
+
+## Step 8 — Deployment Strategies
+
+The staging and production deploy workflows support two modes, controlled by the optional **`image_tag`** input (ci always deploys from source).
+
+### Strategy 1 — Source deploy (default)
+
+Leave `image_tag` blank. Railway checks out the specified commit SHA and builds the Docker image itself from the `Dockerfile` in the repo.
+
+```
+Merge to main
+    └─▶ deploy-ci.yml (auto)                     ← always source deploy
+    └─▶ deploy-staging.yml (manual, no image_tag)
+    └─▶ deploy-production.yml (manual, no image_tag)
+```
+
+**When to use:** quick iteration during development; `ci` environment always uses this path.
+
+**Trade-offs:**
+- Railway performs the full multi-stage Docker build on every deploy (~2–4 min)
+- Build reproducibility depends on the state of the repo at that SHA
+
+---
+
+### Strategy 2 — Image deploy (pre-built)
+
+Provide an `image_tag` (e.g. `sha-abc1234`). The deploy step sends a single-line `FROM ghcr.io/<owner>/taskflow-{server,client}:<tag>` Dockerfile to Railway instead of the full source tree. Railway pulls the pre-built image from GHCR and runs it directly — no build step occurs.
+
+```
+Merge to main
+    ├─▶ build-image.yml (auto)         ← builds & pushes to GHCR, prints image tag
+    │       ghcr.io/.../taskflow-server:sha-abc1234
+    │       ghcr.io/.../taskflow-client:sha-abc1234
+    │
+    └─▶ deploy-staging.yml (manual, image_tag: sha-abc1234)
+    └─▶ deploy-production.yml (manual, image_tag: sha-abc1234)
+```
+
+**When to use:** staging and production promotions where you want speed and reproducibility — the exact same image bytes verified in staging go to production.
+
+**Trade-offs:**
+- Requires `build-image.yml` to have run first (fires automatically on every merge to `main`)
+- GHCR packages must be public **or** Railway must be configured with `ghcr.io` registry credentials (see below)
+
+#### GHCR prerequisites for image deploy
+
+**Option A — Make packages public (simplest)**
+
+After the first `build-image.yml` run, go to `https://github.com/<owner>?tab=packages`, open each package (`taskflow-server`, `taskflow-client`) → **Package settings** → **Change visibility → Public**. Before making images public, confirm your Dockerfiles don’t bake plaintext secrets into the image (in this repo the server image includes an encrypted `.env.vault`, and secrets are unlocked at runtime via `DOTENV_KEY`).
+
+**Option B — Keep packages private + add Railway registry credentials**
+
+1. Create a GitHub PAT: `https://github.com/settings/tokens` → **Generate new token (classic)** → tick only **`read:packages`**
+2. In Railway: project → **Settings** → **Registry Credentials** → **Add Credentials**
+  - Registry: `ghcr.io`
+  - Username: `<owner>` (lowercase; the GitHub org/user that owns the packages)
+  - Password: the PAT from step 1
+3. Ensure GitHub Actions has write access: repo → **Settings** → **Actions** → **General** → **Read and write permissions**
+
+#### How to trigger an image deploy
+
+1. Check the **build-image.yml** job summary on GitHub Actions for the tag (e.g. `sha-abc1234`)
+2. Go to **Actions** → **Deploy → Staging** → **Run workflow**
+3. Fill in:
+   - `image_tag`: `sha-abc1234`
+   - `sha`: *(leave blank or use the same commit SHA)*
+4. For production, repeat with **Deploy → Production** and the same `image_tag`
+
+---
+
+### Comparison
+
+| | Source deploy | Image deploy |
+|---|---|---|
+| Speed | ~2–4 min (Railway builds) | ~30 sec (Railway just pulls) |
+| Reproducibility | Depends on repo state at SHA | Immutable — exact bytes tested in staging |
+| GHCR setup required | No | Yes (public packages or PAT) |
+| Typical use | `ci` environment, rapid iteration | Staging → Production promotions |
+| `image_tag` input | *(leave blank)* | e.g. `sha-abc1234` |
 
 ---
 
