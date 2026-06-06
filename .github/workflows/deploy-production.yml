@@ -15,6 +15,10 @@ on:
         description: Commit SHA to deploy (must already be verified in staging)
         required: false
         default: ''
+      image_tag:
+        description: 'Pre-built image tag to deploy (e.g. sha-abc1234, from build-image.yml). Leave blank to build from source.'
+        required: false
+        default: ''
       release_notes:
         description: Short release notes (used for the GitHub Release)
         required: false
@@ -54,6 +58,7 @@ jobs:
       environment: production
       railway_env: production
       sha: ${{ needs.checkout-sha.outputs.sha }}
+      image_tag: ${{ inputs.image_tag }}
     secrets:
       # Set in GitHub → Settings → Environments → production → Secrets
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
