@@ -1,5 +1,4 @@
 name: Deploy → Staging
-
 # Manual promotion. Specify the commit SHA to deploy (defaults to HEAD of main).
 # Typical use: after QA in dev signs off, engineer manually runs this workflow.
 on:
@@ -12,8 +11,9 @@ on:
       image_tag:
         description: 'Pre-built image tag to deploy (e.g. sha-abc1234, from build-image.yml). Leave blank to build from source.'
         required: false
-        default: ''
-
+        default: 'sha-13d9718'
+        type: choice
+        options: ["sha-13d9718", "sha-4c3abdb", "sha-4814325", "sha-e4a2b0d", "(build from source)"]
 permissions:
   pull-requests: write
 jobs:
@@ -33,7 +33,6 @@ jobs:
             git checkout ${{ inputs.sha }}
           fi
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-
   deploy-staging:
     needs: checkout-sha
     name: Deploy to Staging
