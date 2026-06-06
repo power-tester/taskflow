@@ -9,12 +9,11 @@ on:
         required: false
         default: ''
       image_tag:
-        description:
-          Pre-built image tag to deploy. Recent tags (newest first): sha-440e91c (2026-06-06), sha-13d9718 (2026-06-06), sha-4814325 (2026-06-06), sha-4c3abdb (2026-06-06), sha-e4a2b0d (2026-06-06). Pick 'latest' for the most recent build, or '(build from source)' to build from source.
+        description: Pre-built image tag to deploy. Format is sha-<short-sha> (push date). Pick 'latest' for the most recent build, or '(build from source)' to build from source.
         required: false
-        default: 'sha-440e91c'
+        default: 'latest'
         type: choice
-        options: ["sha-440e91c", "sha-13d9718", "sha-4814325", "sha-4c3abdb", "sha-e4a2b0d", "latest", "(build from source)"]
+        options: ["latest", "(build from source)"]
 permissions:
   pull-requests: write
 jobs:
