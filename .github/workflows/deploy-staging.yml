@@ -9,11 +9,11 @@ on:
         required: false
         default: ''
       image_tag:
-        description: Pre-built image tag to deploy. Format is sha-<short-sha> (push date). Pick 'latest' for the most recent build, or '(build from source)' to build from source.
+        description: Pre-built image tag to deploy (defaults to latest).
         required: false
         default: 'latest'
         type: choice
-        options: ["latest", "(build from source)"]
+        options: ["sha-35fc996 (2026-06-06)", "sha-92bf788 (2026-06-06)", "latest", "(build from source)"]
 permissions:
   pull-requests: write
 jobs:
