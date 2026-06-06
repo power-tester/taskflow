@@ -56,6 +56,22 @@ jobs:
       #                    so Railway pulls the image rather than building from source.
       #   image_tag blank → Railway builds the Docker image itself via the Dockerfile (default).
 
+      - name: Validate inputs
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          # Strip date suffix before checking so "sha-abc1234 (2026-06-06)" is treated as a real tag.
+          IMAGE_TAG="${IMAGE_TAG% (*}"
+          # Only pre-built image deployments are affected — source builds are fine with a sha.
+          if [ -n "$SHA" ] && [ -n "$IMAGE_TAG" ] && [ "$IMAGE_TAG" != "(build from source)" ]; then
+            echo "Error: both 'sha' and 'image_tag' were supplied."
+            echo "These inputs are mutually exclusive: 'sha' pins the source checkout,"
+            echo "but 'image_tag' deploys a pre-built image and ignores the source entirely."
+            echo "Supply one or the other, not both."
+            exit 1
+          fi
+
       - name: Deploy server to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

@@ -217,7 +217,7 @@ jobs:
 
           # Avoid "key: value" patterns in the description — yq stores them as a YAML
           # mapping instead of a plain string, causing the GitHub UI to display JSON.
-          DESCRIPTION="Pre-built image tag to deploy. Format is sha-<short-sha> (push date). Pick 'latest' for the most recent build, or '(build from source)' to build from source."
+          DESCRIPTION="Pre-built image tag to deploy (defaults to latest)."
 
           for FILE in \
             .github/workflows/deploy-staging.yml \
