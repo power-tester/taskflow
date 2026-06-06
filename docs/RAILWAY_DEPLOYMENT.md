@@ -219,7 +219,7 @@ For each environment, add the following under **Variables**:
 
 ## Step 8 — Deployment Strategies
 
-Every deploy workflow supports two modes, controlled by the optional **`image_tag`** input.
+The staging and production deploy workflows support two modes, controlled by the optional **`image_tag`** input (ci always deploys from source).
 
 ### Strategy 1 — Source deploy (default)
 
