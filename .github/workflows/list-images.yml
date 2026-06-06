@@ -1,0 +1,66 @@
+name: List available images
+
+# Run this before dispatching deploy-staging.yml or deploy-production.yml
+# to see which pre-built image tags are available in GHCR.
+#
+# Usage:
+#   Actions tab → "List available images" → Run workflow
+#   Copy the desired tag from the job summary (e.g. sha-abc1234)
+#   Paste it into the image_tag field when dispatching a deploy workflow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: read
+
+jobs:
+  list:
+    name: List GHCR image tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch available tags
+        id: tags
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          fetch_tags() {
+            local IMAGE="$1"
+            # GHCR implements the OCI Distribution Spec — /tags/list requires a Bearer token.
+            TOKEN=$(curl -s \
+              -u "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+              "https://ghcr.io/token?scope=repository:${OWNER}/${IMAGE}:pull" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
+
+            curl -s \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "https://ghcr.io/v2/${OWNER}/${IMAGE}/tags/list" \
+              | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          tags = sorted(data.get('tags', []), reverse=True)
+          for t in tags:
+              print(t)
+          "
+          }
+
+          echo "### taskflow-server tags" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fetch_tags taskflow-server | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### taskflow-client tags" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fetch_tags taskflow-client | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Next step:** copy a \`sha-\` tag above and paste it into the \`image_tag\` field when dispatching [Deploy → Staging](../deploy-staging.yml) or [Deploy → Production](../deploy-production.yml)." >> "$GITHUB_STEP_SUMMARY"
