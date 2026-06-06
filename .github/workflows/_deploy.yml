@@ -62,6 +62,8 @@ jobs:
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMAGE_TAG='${{ inputs.image_tag }}'
+          # Treat the dropdown sentinel as a source build (same as leaving the field blank).
+          [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
           if [ -n "$IMAGE_TAG" ]; then
             if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
               echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
@@ -90,6 +92,8 @@ jobs:
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMAGE_TAG='${{ inputs.image_tag }}'
+          # Treat the dropdown sentinel as a source build (same as leaving the field blank).
+          [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
           if [ -n "$IMAGE_TAG" ]; then
             if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
               echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1

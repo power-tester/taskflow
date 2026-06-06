@@ -19,13 +19,6 @@ jobs:
     name: List GHCR image tags
     runs-on: ubuntu-latest
     steps:
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Fetch available tags
         id: tags
         run: |
@@ -37,11 +30,18 @@ jobs:
             # by a specific user. /user/packages/... resolves to the token owner which
             # in GitHub Actions is the github-actions bot, not the repo owner — causing
             # 404/empty results. Works for public packages without extra auth.
-            curl -s \
+            #
+            # --fail-with-body makes curl exit non-zero on HTTP 4xx/5xx and print the
+            # response body so the error is visible in the log rather than silently
+            # treated as "no tags found".
+            curl --fail-with-body -sS \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/users/${OWNER}/packages/container/${IMAGE}/versions?per_page=30" \
-              | jq -r '.[] | select(.metadata.container.tags | map(startswith("sha-")) | any) | .metadata.container.tags[] | select(startswith("sha-")) as $tag | "\($tag)  (pushed \(.. | .created_at? // empty | .[0:10]))"' 2>/dev/null \
+              | jq -r 'sort_by(.created_at) | reverse
+                       | .[] | select(.metadata.container.tags | map(startswith("sha-")) | any)
+                       | .metadata.container.tags[] | select(startswith("sha-")) as $tag
+                       | "\($tag)  (pushed \(.created_at[0:10]))"' \
               || echo "(no tags found — has build-image.yml run yet?)"
           }
 
