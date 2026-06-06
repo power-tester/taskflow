@@ -59,9 +59,13 @@ jobs:
       - name: Deploy server to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # Pass image_tag via env: so the user-controlled value is never interpolated
+          # directly into the shell script — prevents quote-breaking and command injection.
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_TAG='${{ inputs.image_tag }}'
+          # Strip display date suffix if present: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
+          IMAGE_TAG="${IMAGE_TAG% (*}"
           # Treat the dropdown sentinel as a source build (same as leaving the field blank).
           [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
           if [ -n "$IMAGE_TAG" ]; then
@@ -89,9 +93,13 @@ jobs:
       - name: Deploy client to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # Pass image_tag via env: so the user-controlled value is never interpolated
+          # directly into the shell script — prevents quote-breaking and command injection.
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_TAG='${{ inputs.image_tag }}'
+          # Strip display date suffix if present: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
+          IMAGE_TAG="${IMAGE_TAG% (*}"
           # Treat the dropdown sentinel as a source build (same as leaving the field blank).
           [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
           if [ -n "$IMAGE_TAG" ]; then
