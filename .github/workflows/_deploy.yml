@@ -124,7 +124,7 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Railway env** | ${{ inputs.railway_env }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | ${{ inputs.sha || github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image tag** | ${{ inputs.image_tag || '(built from source)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Triggered by** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Client URL** | ${{ vars.CLIENT_URL }} |" >> $GITHUB_STEP_SUMMARY
