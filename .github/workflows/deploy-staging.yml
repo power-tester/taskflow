@@ -52,10 +52,21 @@ jobs:
           fetch-depth: 0
       - id: resolve
         run: |
-          if [ -n "${{ inputs.sha }}" ]; then
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          # Strip date suffix: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
+          IMAGE_TAG="${IMAGE_TAG% (*}"
+          # If image_tag is a sha- tag, derive the commit SHA from it so deploy
+          # summaries and PR notifications point at the exact commit the image was built from.
+          SHORT_SHA_FROM_TAG=$(echo "$IMAGE_TAG" | sed -n 's/^sha-\([a-f0-9]*\).*/\1/p')
+          if [ -n "$SHORT_SHA_FROM_TAG" ]; then
+            SHA=$(git rev-parse "$SHORT_SHA_FROM_TAG")
+          elif [ -n "${{ inputs.sha }}" ]; then
             git checkout ${{ inputs.sha }}
+            SHA=$(git rev-parse HEAD)
+          else
+            SHA=$(git rev-parse HEAD)
           fi
-          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
   deploy-staging:
     needs: checkout-sha
     name: Deploy to Staging
