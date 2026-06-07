@@ -10,16 +10,16 @@ name: Deploy → Production
 on:
   workflow_dispatch:
     inputs:
-      sha:
-        description: Commit SHA to deploy (must already be verified in staging)
-        required: false
-        default: ''
       image_tag:
         description: Pre-built image tag to deploy (defaults to latest).
         required: false
         default: 'latest'
         type: choice
         options: ["sha-35fc996 (2026-06-06)", "sha-92bf788 (2026-06-06)", "latest", "(build from source)"]
+      sha:
+        description: Commit SHA to build from (only used when image tag is "(build from source)")
+        required: false
+        default: ''
       release_notes:
         description: Short release notes (used for the GitHub Release)
         required: false
@@ -28,7 +28,29 @@ permissions:
   pull-requests: write
   contents: write # needed for create-release
 jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for conflicting inputs
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          # Strip date suffix so "sha-abc1234 (2026-06-06)" is treated as a real tag.
+          IMAGE_TAG="${IMAGE_TAG% (*}"
+          # sha + a real image_tag are mutually exclusive: sha pins the source checkout
+          # but image_tag deploys a pre-built image and ignores the checked-out source.
+          if [ -n "$SHA" ] && [ -n "$IMAGE_TAG" ] && [ "$IMAGE_TAG" != "(build from source)" ]; then
+            echo "Error: both 'sha' and 'image_tag' were supplied."
+            echo "These inputs are mutually exclusive: 'sha' pins the source checkout,"
+            echo "but 'image_tag' deploys a pre-built image and ignores the source entirely."
+            echo "Supply one or the other, not both."
+            exit 1
+          fi
+
   checkout-sha:
+    needs: validate-inputs
     name: Resolve SHA
     runs-on: ubuntu-latest
     outputs:

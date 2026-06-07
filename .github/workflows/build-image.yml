@@ -205,7 +205,7 @@ jobs:
           # Options dropdown: tags shown as "sha-abc1234 (2026-06-06)" so engineers
           # can see the push date at a glance; the date suffix is stripped in _deploy.yml
           # before the tag is used to pull the image.
-          OPTIONS_JSON=$(echo "$BASE" | jq -c '[.[] | "\(.tag) (\(.date))"] + ["latest", "(build from source)"]')
+          OPTIONS_JSON=$(echo "$BASE" | jq -c '["latest", "(build from source)"] + [.[] | "\(.tag) (\(.date))"]')
 
           echo "options_json=${OPTIONS_JSON}" >> $GITHUB_OUTPUT
           echo "new_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
