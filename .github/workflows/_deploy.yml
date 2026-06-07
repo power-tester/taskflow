@@ -19,16 +19,16 @@ on:
         description: Railway environment name to deploy into (dev | staging | production)
         required: true
         type: string
-      sha:
-        description: Full commit SHA to deploy (defaults to HEAD of the triggering branch)
-        required: false
-        type: string
-        default: ''
       image_tag:
         description: |
           Pre-built image tag from GHCR (e.g. sha-abc1234) produced by build-image.yml.
           When set, Railway deploys from the pre-built image instead of building from source.
-          Leave blank to use the default source-build behaviour.
+          Pass blank or "(build from source)" to build from source instead.
+        required: false
+        type: string
+        default: ''
+      sha:
+        description: Full commit SHA to build from (only used when image_tag is blank or "(build from source)")
         required: false
         type: string
         default: ''
@@ -51,26 +51,10 @@ jobs:
           fetch-depth: 0
 
       # Deployment mode:
-      #   image_tag set  → deploy from a pre-built GHCR image (produced by build-image.yml).
-      #                    A temporary directory with a minimal FROM-only Dockerfile is created
-      #                    so Railway pulls the image rather than building from source.
-      #   image_tag blank → Railway builds the Docker image itself via the Dockerfile (default).
-
-      - name: Validate inputs
-        env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
-          SHA: ${{ inputs.sha }}
-        run: |
-          # Strip date suffix before checking so "sha-abc1234 (2026-06-06)" is treated as a real tag.
-          IMAGE_TAG="${IMAGE_TAG% (*}"
-          # Only pre-built image deployments are affected — source builds are fine with a sha.
-          if [ -n "$SHA" ] && [ -n "$IMAGE_TAG" ] && [ "$IMAGE_TAG" != "(build from source)" ]; then
-            echo "Error: both 'sha' and 'image_tag' were supplied."
-            echo "These inputs are mutually exclusive: 'sha' pins the source checkout,"
-            echo "but 'image_tag' deploys a pre-built image and ignores the source entirely."
-            echo "Supply one or the other, not both."
-            exit 1
-          fi
+      #   image_tag set               → deploy from a pre-built GHCR image (produced by build-image.yml).
+      #                                 A temporary directory with a minimal FROM-only Dockerfile is created
+      #                                 so Railway pulls the image rather than building from source.
+      #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
 
       - name: Deploy server to Railway
         env:
