@@ -15,8 +15,7 @@ on:
         required: false
         default: 'latest'
         type: choice
-        options:
-          ['sha-35fc996 (2026-06-06)', 'sha-92bf788 (2026-06-06)', 'latest', '(build from source)']
+        options: ["latest", "(build from source)", "sha-c280978 (2026-06-07)", "sha-35fc996 (2026-06-06)", "sha-92bf788 (2026-06-06)"]
       sha:
         description: Commit SHA to build from (only used when image tag is "(build from source)")
         required: false
@@ -49,7 +48,6 @@ jobs:
             echo "Supply one or the other, not both."
             exit 1
           fi
-
   checkout-sha:
     needs: validate-inputs
     name: Resolve SHA
