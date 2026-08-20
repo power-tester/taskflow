@@ -58,11 +58,21 @@ runs:
           exit 1
         fi
         TARGET="taskflow-${SERVICE}-${RAILWAY_ENV}"
-        # TEMPORARY DIAGNOSTIC: last 4 chars, to compare against the masked value
-        # Railway shows in Project Settings -> Tokens (e.g. "****-12ec"). Railway
-        # already displays these 4 publicly and they do not narrow a 36-char UUID.
-        # Remove once the staging token mismatch is resolved.
-        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars, fingerprint ...${RAILWAY_TOKEN: -4}"
+        # TEMPORARY DIAGNOSTIC. The last-4 fingerprint only proved 4 of 36 chars, so a
+        # value with the right length and right suffix but a wrong character in the
+        # middle looked identical. A truncated SHA-256 compares ALL 36 characters and
+        # leaks nothing: 12 hex chars is 48 bits, useless for recovering a UUID.
+        # Compare locally with:
+        #   printf '%s' '<token>' | shasum -a 256 | cut -c1-12     # macOS
+        #   printf '%s' '<token>' | sha256sum     | cut -c1-12     # Linux
+        # Remove once staging is green.
+        TOKEN_HASH=$(printf '%s' "$RAILWAY_TOKEN" | sha256sum | cut -c1-12)
+        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars, sha256 ${TOKEN_HASH}"
+
+        # If the hash matches but Railway still rejects it, the value is right and
+        # something else on the runner is interfering — so surface that here too.
+        echo "RAILWAY_* variables visible on this runner (values redacted):"
+        env | grep -i '^RAILWAY' | sed 's/=.*/=<redacted>/' | sed 's/^/  /' || true
         echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
 
         # `railway status` is the only probe worth running: it resolves the token to a
