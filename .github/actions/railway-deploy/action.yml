@@ -1,0 +1,75 @@
+name: Railway deploy
+description: >
+  Deploy one taskflow service to Railway, either from source or from a pre-built GHCR image.
+
+# Conventions this action assumes (same for every service):
+#   Railway service name : taskflow-<service>-<railway_env>
+#   Dockerfile path      : packages/<service>/Dockerfile
+#   Pre-built image      : ghcr.io/<owner>/taskflow-<service>:<image_tag>
+#
+# There is no `sha` input by design. When image_tag is blank this action deploys
+# whatever is in the current working directory, so the CALLER is responsible for
+# checking out the commit it wants built (see actions/checkout in _deploy.yml).
+# When image_tag is set the working directory is ignored entirely — which is why
+# the callers treat `sha` and `image_tag` as mutually exclusive.
+
+inputs:
+  service:
+    description: Service short name (server | client). Drives the Railway service name, image name and Dockerfile path.
+    required: true
+  railway_env:
+    description: Railway environment name to deploy into (ci | dev | staging | production).
+    required: true
+  image_tag:
+    description: |
+      Normalized image tag from GHCR (e.g. sha-abc1234) produced by build-image.yml.
+      Already undecorated by resolve-deploy-inputs — do NOT re-parse display forms here.
+      When set, Railway deploys from the pre-built image; blank means build from source.
+    required: false
+    default: ''
+  railway_token:
+    description: Railway project token (Settings → Tokens in the Railway dashboard).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Deployment mode:
+    #   image_tag set               → deploy from a pre-built GHCR image (produced by build-image.yml).
+    #                                 A temporary directory with a minimal FROM-only Dockerfile is created
+    #                                 so Railway pulls the image rather than building from source.
+    #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
+    - name: Deploy ${{ inputs.service }} to Railway
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway_token }}
+        # Pass user-controlled values via env: so they are never interpolated
+        # directly into the shell script — prevents quote-breaking and command injection.
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        SERVICE: ${{ inputs.service }}
+        RAILWAY_ENV: ${{ inputs.railway_env }}
+        REPO_OWNER: ${{ github.repository_owner }}
+      run: |
+        OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+        if [ -n "$IMAGE_TAG" ]; then
+          if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+            echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
+          fi
+          IMAGE="ghcr.io/${OWNER}/taskflow-${SERVICE}:${IMAGE_TAG}"
+          echo "Deploying pre-built image ${IMAGE} → ${RAILWAY_ENV}..."
+          DEPLOY_DIR=$(mktemp -d)
+          # Railway is configured with Dockerfile path 'packages/<service>/Dockerfile'.
+          # The uploaded context must contain a file at that exact path.
+          mkdir -p "$DEPLOY_DIR/packages/${SERVICE}"
+          echo "FROM ${IMAGE}" > "$DEPLOY_DIR/packages/${SERVICE}/Dockerfile"
+          cd "$DEPLOY_DIR"
+        else
+          echo "Deploying from source for taskflow-${SERVICE}-${RAILWAY_ENV} → ${RAILWAY_ENV}..."
+        fi
+        # --detach is intentionally omitted: railway up blocks until Railway confirms
+        # the new deployment is live, so the caller's health check is guaranteed to test
+        # the new instance rather than the still-running old one.
+        npx --yes @railway/cli@latest up \
+          --service "taskflow-${SERVICE}-${RAILWAY_ENV}" \
+          --environment "$RAILWAY_ENV"
+        echo "${SERVICE} deploy complete."
