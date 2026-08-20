@@ -28,58 +28,28 @@ permissions:
   pull-requests: write
   contents: write # needed for create-release
 jobs:
-  validate-inputs:
-    name: Validate inputs
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for conflicting inputs
-        env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
-          SHA: ${{ inputs.sha }}
-        run: |
-          # Strip date suffix so "sha-abc1234 (2026-06-06)" is treated as a real tag.
-          IMAGE_TAG="${IMAGE_TAG% (*}"
-          # sha + a real image_tag are mutually exclusive: sha pins the source checkout
-          # but image_tag deploys a pre-built image and ignores the checked-out source.
-          if [ -n "$SHA" ] && [ -n "$IMAGE_TAG" ] && [ "$IMAGE_TAG" != "(build from source)" ]; then
-            echo "Error: both 'sha' and 'image_tag' were supplied."
-            echo "These inputs are mutually exclusive: 'sha' pins the source checkout,"
-            echo "but 'image_tag' deploys a pre-built image and ignores the source entirely."
-            echo "Supply one or the other, not both."
-            exit 1
-          fi
-  checkout-sha:
-    needs: validate-inputs
-    name: Resolve SHA
+  resolve:
+    name: Validate & resolve inputs
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       short_sha: ${{ steps.resolve.outputs.short_sha }}
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
     steps:
+      # fetch-depth: 0 so resolve-deploy-inputs can rev-parse a short SHA from a sha-* tag.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
       - id: resolve
-        run: |
-          IMAGE_TAG="${{ inputs.image_tag }}"
-          # Strip date suffix: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
-          IMAGE_TAG="${IMAGE_TAG% (*}"
-          # If image_tag is a sha- tag, derive the commit SHA from it so the GitHub
-          # Release is tagged against the exact commit the deployed image was built from.
-          SHORT_SHA_FROM_TAG=$(echo "$IMAGE_TAG" | sed -n 's/^sha-\([a-f0-9]*\).*/\1/p')
-          if [ -n "$SHORT_SHA_FROM_TAG" ]; then
-            SHA=$(git rev-parse "$SHORT_SHA_FROM_TAG")
-          elif [ -n "${{ inputs.sha }}" ]; then
-            git checkout ${{ inputs.sha }}
-            SHA=$(git rev-parse HEAD)
-          else
-            SHA=$(git rev-parse HEAD)
-          fi
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-          echo "short_sha=${SHA:0:7}" >> $GITHUB_OUTPUT
+        uses: ./.github/actions/resolve-deploy-inputs
+        with:
+          # RAW dispatch input — the resolve action is what normalizes it.
+          image_tag: ${{ inputs.image_tag }}
+          sha: ${{ inputs.sha }}
+
   deploy-production:
-    needs: checkout-sha
+    needs: resolve
     name: Deploy to Production
     # ← This references the GitHub Environment "production".
     # GitHub will pause here and require reviewer approval before continuing.
@@ -87,13 +57,14 @@ jobs:
     with:
       environment: production
       railway_env: production
-      sha: ${{ needs.checkout-sha.outputs.sha }}
-      image_tag: ${{ inputs.image_tag }}
+      sha: ${{ needs.resolve.outputs.sha }}
+      image_tag: ${{ needs.resolve.outputs.image_tag }}
     secrets:
       # Set in GitHub → Settings → Environments → production → Secrets
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+  
   create-release:
-    needs: [checkout-sha, deploy-production]
+    needs: [resolve, deploy-production]
     name: Create GitHub Release
     runs-on: ubuntu-latest
     if: success()
@@ -102,17 +73,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.checkout-sha.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - name: Generate tag name
         id: tag
         run: |
-          TAG="v$(date +'%Y.%m.%d')-${{ needs.checkout-sha.outputs.short_sha }}"
+          TAG="v$(date +'%Y.%m.%d')-${{ needs.resolve.outputs.short_sha }}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
       - name: Create Release
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = '${{ needs.checkout-sha.outputs.sha }}';
+            const sha = '${{ needs.resolve.outputs.sha }}';
             const tag = '${{ steps.tag.outputs.tag }}';
             const notes = `${{ inputs.release_notes }}` || `Production deploy of ${sha.slice(0,7)}`;
 

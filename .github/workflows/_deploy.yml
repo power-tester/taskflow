@@ -21,9 +21,11 @@ on:
         type: string
       image_tag:
         description: |
-          Pre-built image tag from GHCR (e.g. sha-abc1234) produced by build-image.yml.
-          When set, Railway deploys from the pre-built image instead of building from source.
-          Pass blank or "(build from source)" to build from source instead.
+          Normalized pre-built image tag from GHCR (e.g. sha-abc1234), as produced by
+          build-image.yml and undecorated by the resolve-deploy-inputs action.
+          When set, Railway deploys from the pre-built image; blank means build from source.
+          Callers must pass a clean tag — display forms like "sha-abc1234 (2026-06-07)"
+          and the "(build from source)" sentinel are NOT accepted here.
         required: false
         type: string
         default: ''
@@ -50,77 +52,23 @@ jobs:
           ref: ${{ inputs.sha || github.ref }}
           fetch-depth: 0
 
-      # Deployment mode:
-      #   image_tag set               → deploy from a pre-built GHCR image (produced by build-image.yml).
-      #                                 A temporary directory with a minimal FROM-only Dockerfile is created
-      #                                 so Railway pulls the image rather than building from source.
-      #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
-
+      # The per-service deploy logic (source vs pre-built image) lives in the local
+      # composite action so server and client cannot drift apart.
       - name: Deploy server to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          # Pass image_tag via env: so the user-controlled value is never interpolated
-          # directly into the shell script — prevents quote-breaking and command injection.
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          # Strip display date suffix if present: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
-          IMAGE_TAG="${IMAGE_TAG% (*}"
-          # Treat the dropdown sentinel as a source build (same as leaving the field blank).
-          [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
-          if [ -n "$IMAGE_TAG" ]; then
-            if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
-              echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
-            fi
-            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG} → ${{ inputs.railway_env }}..."
-            DEPLOY_DIR=$(mktemp -d)
-            # Railway is configured with Dockerfile path 'packages/server/Dockerfile'.
-            # The uploaded context must contain a file at that exact path.
-            mkdir -p "$DEPLOY_DIR/packages/server"
-            echo "FROM ghcr.io/${OWNER}/taskflow-server:${IMAGE_TAG}" > "$DEPLOY_DIR/packages/server/Dockerfile"
-            cd "$DEPLOY_DIR"
-          else
-            echo "Deploying from source for taskflow-server-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
-          fi
-          # --detach is intentionally omitted: railway up blocks until Railway confirms
-          # the new deployment is live, so the health check below is guaranteed to test
-          # the new instance rather than the still-running old one.
-          npx --yes @railway/cli@latest up \
-            --service taskflow-server-${{ inputs.railway_env }} \
-            --environment ${{ inputs.railway_env }}
-          echo "Server deploy complete."
+        uses: ./.github/actions/railway-deploy
+        with:
+          service: server
+          railway_env: ${{ inputs.railway_env }}
+          image_tag: ${{ inputs.image_tag }}
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
 
       - name: Deploy client to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          # Pass image_tag via env: so the user-controlled value is never interpolated
-          # directly into the shell script — prevents quote-breaking and command injection.
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          # Strip display date suffix if present: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
-          IMAGE_TAG="${IMAGE_TAG% (*}"
-          # Treat the dropdown sentinel as a source build (same as leaving the field blank).
-          [ "$IMAGE_TAG" = "(build from source)" ] && IMAGE_TAG=""
-          if [ -n "$IMAGE_TAG" ]; then
-            if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
-              echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
-            fi
-            echo "Deploying pre-built image ghcr.io/${OWNER}/taskflow-client:${IMAGE_TAG} → ${{ inputs.railway_env }}..."
-            DEPLOY_DIR=$(mktemp -d)
-            # Railway is configured with Dockerfile path 'packages/client/Dockerfile'.
-            # The uploaded context must contain a file at that exact path.
-            mkdir -p "$DEPLOY_DIR/packages/client"
-            echo "FROM ghcr.io/${OWNER}/taskflow-client:${IMAGE_TAG}" > "$DEPLOY_DIR/packages/client/Dockerfile"
-            cd "$DEPLOY_DIR"
-          else
-            echo "Deploying from source for taskflow-client-${{ inputs.railway_env }} → ${{ inputs.railway_env }}..."
-          fi
-          # --detach is intentionally omitted: see server deploy step above.
-          npx --yes @railway/cli@latest up \
-            --service taskflow-client-${{ inputs.railway_env }} \
-            --environment ${{ inputs.railway_env }}
-          echo "Client deploy complete."
+        uses: ./.github/actions/railway-deploy
+        with:
+          service: client
+          railway_env: ${{ inputs.railway_env }}
+          image_tag: ${{ inputs.image_tag }}
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
 
       - name: Health check (server)
         run: |
