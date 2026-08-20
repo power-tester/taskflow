@@ -39,10 +39,10 @@ runs:
     #                                 A temporary directory with a minimal FROM-only Dockerfile is created
     #                                 so Railway pulls the image rather than building from source.
     #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
-    # Diagnostic preflight. Separates "the credential is wrong" from "the deploy
-    # itself failed" — without it, an auth failure surfaces only as a bare Railway
-    # error after ~10s of npm output, indistinguishable from a deploy problem.
-    - name: Check Railway credentials (${{ inputs.service }})
+    # Access preflight. Separates "the credential is wrong" from "the deploy itself
+    # failed" — without it an auth failure surfaces only as a bare Railway error
+    # after ~10s of npm output, indistinguishable from a deploy problem.
+    - name: Check Railway access (${{ inputs.service }})
       shell: bash
       env:
         RAILWAY_TOKEN: ${{ inputs.railway_token }}
@@ -57,20 +57,31 @@ runs:
           echo "RAILWAY_TOKEN is set on that GitHub Environment."
           exit 1
         fi
+        TARGET="taskflow-${SERVICE}-${RAILWAY_ENV}"
         echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars (value masked)."
-        echo "Target: service=taskflow-${SERVICE}-${RAILWAY_ENV} environment=${RAILWAY_ENV}"
+        echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
 
-        # The probes below are INFORMATIONAL ONLY and never fail the job. Railway
-        # project tokens are not tied to a user account, so `whoami` can legitimately
-        # fail for a token that deploys perfectly well. `railway up` stays the
-        # authority on whether the credential works.
-        echo "--- railway whoami ---"
-        npx --yes @railway/cli@latest whoami 2>&1 | sed 's/^/  /' \
-          || echo "  (whoami failed — normal for a project token, not conclusive)"
-        echo "--- railway status ---"
-        npx --yes @railway/cli@latest status 2>&1 | sed 's/^/  /' \
-          || echo "  (status failed — see above)"
-        echo "--- end probes ---"
+        # `railway status` is the only probe worth running: it resolves the token to a
+        # workspace/project/environment and lists the services it can actually see.
+        #
+        # Do NOT add `railway whoami` here. Project tokens are not tied to a user
+        # account, so it reports "Unauthorized. Please check that your RAILWAY_TOKEN
+        # is valid..." for tokens that deploy perfectly well — wording almost
+        # identical to a genuine auth failure, which sends debuggers the wrong way.
+        if ! STATUS=$(npx --yes @railway/cli@latest status 2>&1); then
+          echo "$STATUS" | sed 's/^/  /'
+          echo "::warning::railway status failed for environment '${RAILWAY_ENV}'. If the"
+          echo "deploy below also fails on auth, the token is rejected or the environment"
+          echo "no longer exists. railway up remains the authority — not failing here."
+          exit 0
+        fi
+        echo "$STATUS" | sed 's/^/  /'
+
+        # Catches a renamed or deleted service before the deploy reports it obliquely.
+        if ! printf '%s' "$STATUS" | grep -qF "$TARGET"; then
+          echo "::warning::Service '${TARGET}' was not listed by railway status —"
+          echo "it may have been renamed or removed in the '${RAILWAY_ENV}' environment."
+        fi
 
     - name: Deploy ${{ inputs.service }} to Railway
       shell: bash
