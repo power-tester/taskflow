@@ -58,7 +58,11 @@ runs:
           exit 1
         fi
         TARGET="taskflow-${SERVICE}-${RAILWAY_ENV}"
-        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars (value masked)."
+        # TEMPORARY DIAGNOSTIC: last 4 chars, to compare against the masked value
+        # Railway shows in Project Settings -> Tokens (e.g. "****-12ec"). Railway
+        # already displays these 4 publicly and they do not narrow a 36-char UUID.
+        # Remove once the staging token mismatch is resolved.
+        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars, fingerprint ...${RAILWAY_TOKEN: -4}"
         echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
 
         # `railway status` is the only probe worth running: it resolves the token to a
@@ -70,10 +74,10 @@ runs:
         # identical to a genuine auth failure, which sends debuggers the wrong way.
         if ! STATUS=$(npx --yes @railway/cli@latest status 2>&1); then
           echo "$STATUS" | sed 's/^/  /'
-          echo "::warning::railway status failed for environment '${RAILWAY_ENV}'. If the"
-          echo "deploy below also fails on auth, the token is rejected or the environment"
-          echo "no longer exists. railway up remains the authority — not failing here."
-          exit 0
+          echo "::error::railway status failed for environment '${RAILWAY_ENV}' — the token"
+          echo "is not accepted by Railway. Compare the fingerprint above with Railway ->"
+          echo "Project Settings -> Tokens; if it differs, the secret holds a stale value."
+          exit 1
         fi
         echo "$STATUS" | sed 's/^/  /'
 
