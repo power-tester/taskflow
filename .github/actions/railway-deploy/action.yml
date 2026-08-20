@@ -39,6 +39,39 @@ runs:
     #                                 A temporary directory with a minimal FROM-only Dockerfile is created
     #                                 so Railway pulls the image rather than building from source.
     #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
+    # Diagnostic preflight. Separates "the credential is wrong" from "the deploy
+    # itself failed" — without it, an auth failure surfaces only as a bare Railway
+    # error after ~10s of npm output, indistinguishable from a deploy problem.
+    - name: Check Railway credentials (${{ inputs.service }})
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway_token }}
+        SERVICE: ${{ inputs.service }}
+        RAILWAY_ENV: ${{ inputs.railway_env }}
+      run: |
+        # A missing secret is a hard failure: it means the token never reached this
+        # action, which is a wiring bug rather than a credential problem.
+        if [ -z "${RAILWAY_TOKEN:-}" ]; then
+          echo "::error::RAILWAY_TOKEN is empty — the secret did not reach this action."
+          echo "Check that the calling job declares the right 'environment:' and that"
+          echo "RAILWAY_TOKEN is set on that GitHub Environment."
+          exit 1
+        fi
+        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars (value masked)."
+        echo "Target: service=taskflow-${SERVICE}-${RAILWAY_ENV} environment=${RAILWAY_ENV}"
+
+        # The probes below are INFORMATIONAL ONLY and never fail the job. Railway
+        # project tokens are not tied to a user account, so `whoami` can legitimately
+        # fail for a token that deploys perfectly well. `railway up` stays the
+        # authority on whether the credential works.
+        echo "--- railway whoami ---"
+        npx --yes @railway/cli@latest whoami 2>&1 | sed 's/^/  /' \
+          || echo "  (whoami failed — normal for a project token, not conclusive)"
+        echo "--- railway status ---"
+        npx --yes @railway/cli@latest status 2>&1 | sed 's/^/  /' \
+          || echo "  (status failed — see above)"
+        echo "--- end probes ---"
+
     - name: Deploy ${{ inputs.service }} to Railway
       shell: bash
       env:
