@@ -34,6 +34,52 @@ on:
         required: false
         type: string
         default: ''
+      # --- Reuse knobs. Every default reproduces this repo's current behaviour. ---
+      services:
+        description: |
+          JSON array of service short names to deploy, e.g. '["server","client"]' or '["app"]'.
+          One matrix leg per entry. Legs run one at a time to preserve the previous
+          sequential order; raise max-parallel below if the services are independent.
+        required: false
+        type: string
+        default: '["server","client"]'
+      project_slug:
+        description: Project prefix for Railway service and image names. Defaults to the repository name.
+        required: false
+        type: string
+        default: ''
+      registry:
+        description: Container registry hosting the pre-built images.
+        required: false
+        type: string
+        default: ghcr.io
+      dockerfile_path_template:
+        description: |
+          Dockerfile path Railway is configured to build, with {0} standing in for the
+          service short name. Used to recreate that exact path in the temp context.
+        required: false
+        type: string
+        default: packages/{0}/Dockerfile
+      health_url:
+        description: Base URL for the post-deploy health check. Defaults to the environment's SERVER_URL variable.
+        required: false
+        type: string
+        default: ''
+      health_path:
+        description: Path appended to health_url for the health check.
+        required: false
+        type: string
+        default: /health
+      app_url:
+        description: User-facing URL shown in the summary and PR comment. Defaults to the environment's CLIENT_URL variable.
+        required: false
+        type: string
+        default: ''
+      label_colors:
+        description: JSON map of environment name to PR label hex colour.
+        required: false
+        type: string
+        default: '{"ci":"0075ca","dev":"e4e669","staging":"0e8a16","production":"d93f0b"}'
     secrets:
       RAILWAY_TOKEN:
         description: Railway project token (Settings → Tokens in Railway dashboard)
@@ -41,9 +87,24 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to ${{ inputs.environment }}
+    name: Deploy ${{ matrix.service }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
+    # The ONLY job that declares the environment. The health check and summary
+    # deliberately do not, so adding required reviewers gates the deploy alone
+    # rather than every job in the chain.
     environment: ${{ inputs.environment }}
+    strategy:
+      # One at a time, matching the sequential server-then-client order this
+      # replaced. Raise it if the services have no ordering relationship.
+      max-parallel: 1
+      matrix:
+        service: ${{ fromJSON(inputs.services) }}
+    outputs:
+      # Environment vars are only readable from a job that declares the environment,
+      # so resolve them here and hand them to the ungated jobs below. Every matrix
+      # leg writes the same values, so last-writer-wins is deterministic.
+      health_url: ${{ steps.urls.outputs.health_url }}
+      app_url: ${{ steps.urls.outputs.app_url }}
 
     steps:
       - name: Checkout
@@ -59,36 +120,53 @@ jobs:
           ref: ${{ inputs.image_tag != '' && github.ref || inputs.sha || github.ref }}
           fetch-depth: 0
 
-      # The per-service deploy logic (source vs pre-built image) lives in the local
-      # composite action so server and client cannot drift apart.
-      - name: Deploy server to Railway
-        uses: ./.github/actions/railway-deploy
-        with:
-          service: server
-          railway_env: ${{ inputs.railway_env }}
-          image_tag: ${{ inputs.image_tag }}
-          railway_token: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Deploy client to Railway
-        uses: ./.github/actions/railway-deploy
-        with:
-          service: client
-          railway_env: ${{ inputs.railway_env }}
-          image_tag: ${{ inputs.image_tag }}
-          railway_token: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Health check (server)
+      - name: Resolve environment URLs
+        id: urls
+        env:
+          HEALTH_URL: ${{ inputs.health_url || vars.SERVER_URL }}
+          APP_URL: ${{ inputs.app_url || vars.CLIENT_URL }}
         run: |
-          # railway up (without --detach) already confirmed the new deployment is live.
-          # This step is a final HTTP smoke test to verify the endpoint is reachable
-          # from the GitHub Actions runner and returns a healthy response.
+          {
+            echo "health_url=${HEALTH_URL}"
+            echo "app_url=${APP_URL}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The per-service deploy logic (source vs pre-built image) lives in the local
+      # composite action so the services cannot drift apart.
+      - name: Deploy ${{ matrix.service }} to Railway
+        uses: ./.github/actions/railway-deploy
+        with:
+          service: ${{ matrix.service }}
+          railway_env: ${{ inputs.railway_env }}
+          image_tag: ${{ inputs.image_tag }}
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          project_slug: ${{ inputs.project_slug }}
+          registry: ${{ inputs.registry }}
+          dockerfile_path: ${{ format(inputs.dockerfile_path_template, matrix.service) }}
+
+  verify:
+    name: Health check & summary
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        env:
+          HEALTH_PATH: ${{ inputs.health_path }}
+          BASE_URL_RAW: ${{ needs.deploy.outputs.health_url }}
+        run: |
+          # railway up (without --detach) already confirmed each deployment is live.
+          # This is a final HTTP smoke test to verify the endpoint is reachable from
+          # the GitHub Actions runner and returns a healthy response.
+          if [ -z "${BASE_URL_RAW:-}" ]; then
+            echo "::warning::No health URL configured (health_url input / SERVER_URL variable) — skipping."
+            exit 0
+          fi
           DEADLINE=$(( $(date +%s) + 60 ))  # allow up to 1 minute for DNS/LB propagation
           INTERVAL=5
-          BASE_URL="${{ vars.SERVER_URL }}"
-          BASE_URL="${BASE_URL%/}"  # strip any trailing slash
+          BASE_URL="${BASE_URL_RAW%/}"  # strip any trailing slash
           while true; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/health" || echo "000")
-            echo "Health check ${BASE_URL}/health → $STATUS ($(( DEADLINE - $(date +%s) ))s remaining)"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${HEALTH_PATH}" || echo "000")
+            echo "Health check ${BASE_URL}${HEALTH_PATH} → $STATUS ($(( DEADLINE - $(date +%s) ))s remaining)"
             if [ "$STATUS" = "200" ]; then
               echo "✅ Health check passed."
               exit 0
@@ -101,23 +179,30 @@ jobs:
           done
 
       - name: Summary
+        if: ${{ always() }}
+        env:
+          APP_URL: ${{ needs.deploy.outputs.app_url }}
         run: |
-          echo "## Deploy to ${{ inputs.environment }} complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| | |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Railway env** | ${{ inputs.railway_env }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ inputs.sha || github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Image tag** | ${{ inputs.image_tag || '(built from source)' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Triggered by** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Client URL** | ${{ vars.CLIENT_URL }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Deploy to ${{ inputs.environment }} complete"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Environment** | ${{ inputs.environment }} |"
+            echo "| **Railway env** | ${{ inputs.railway_env }} |"
+            echo "| **Services** | ${{ inputs.services }} |"
+            echo "| **Commit** | ${{ inputs.sha || github.sha }} |"
+            echo "| **Image tag** | ${{ inputs.image_tag || '(built from source)' }} |"
+            echo "| **Triggered by** | ${{ github.actor }} |"
+            echo "| **App URL** | ${APP_URL} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   notify-pr:
     name: Notify PR
-    needs: deploy
+    needs: [deploy, verify]
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    # No environment: the URL comes from the deploy job's outputs, so this job needs
+    # no environment-scoped variables and stays outside any approval gate.
     if: ${{ always() }}
     steps:
       - name: Comment deploy status on PR
@@ -126,10 +211,13 @@ jobs:
           script: |
             // inputs.sha is set for staging/production (manual); fall back to context.sha for ci (push)
             const sha = '${{ inputs.sha }}' || context.sha;
-            const status = '${{ needs.deploy.result }}';
+            // Report the overall outcome: a green deploy with a failed health check
+            // is not a successful release.
+            const status = ('${{ needs.deploy.result }}' === 'success'
+                         && '${{ needs.verify.result }}' === 'success') ? 'success' : 'failure';
             const emoji = status === 'success' ? '✅' : '❌';
             const env = '${{ inputs.environment }}';
-            const body = `${emoji} **${env} deploy** ${status} for \`${sha.slice(0,7)}\`\n\nEnvironment: ${env} | [View app](${{ vars.CLIENT_URL }})`;
+            const body = `${emoji} **${env} deploy** ${status} for \`${sha.slice(0,7)}\`\n\nEnvironment: ${env} | [View app](${{ needs.deploy.outputs.app_url }})`;
 
             const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
@@ -156,7 +244,9 @@ jobs:
 
       - name: Label PR with deployed environment
         uses: actions/github-script@v7
-        if: ${{ needs.deploy.result == 'success' }}
+        if: ${{ needs.deploy.result == 'success' && needs.verify.result == 'success' }}
+        env:
+          LABEL_COLORS: ${{ inputs.label_colors }}
         with:
           script: |
             // inputs.sha is set for staging/production (manual); fall back to context.sha for ci (push)
@@ -171,7 +261,7 @@ jobs:
 
             // Ensure the environment label exists with the correct color before applying it.
             // Colors: ci=blue, dev=yellow, staging=green, production=red.
-            const labelColors = { ci: '0075ca', dev: 'e4e669', staging: '0e8a16', production: 'd93f0b' };
+            const labelColors = JSON.parse(process.env.LABEL_COLORS);
             const labelName = `deployed: ${env}`;
             const labelColor = labelColors[env] ?? 'ededed';
             try {

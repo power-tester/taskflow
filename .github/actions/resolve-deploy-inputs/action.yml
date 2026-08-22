@@ -32,6 +32,13 @@ inputs:
       Token used to read GHCR package metadata when resolving a moving tag such as
       "latest" back to the commit its image was built from. Needs `packages: read`.
     required: true
+  reference_package:
+    description: >
+      GHCR container package queried to map a moving tag onto its sha-* tag. Every
+      service image shares the same sha-* tags, so one package is enough. Defaults to
+      <repository name>-server; set it when the services are not named that way.
+    required: false
+    default: ''
 
 outputs:
   sha:
@@ -54,6 +61,7 @@ runs:
         # Raw values via env: so they are never interpolated into the script text.
         IMAGE_TAG_RAW: ${{ inputs.image_tag }}
         SHA_RAW: ${{ inputs.sha }}
+        REFERENCE_PACKAGE: ${{ inputs.reference_package }}
         GH_TOKEN: ${{ inputs.github_token }}
         PKG_OWNER: ${{ github.repository_owner }}
       run: |
@@ -93,11 +101,12 @@ runs:
           # the PR comment and the "deployed: <env>" label, and tags the GitHub Release
           # against the wrong commit.
           OWNER=$(echo "$PKG_OWNER" | tr '[:upper:]' '[:lower:]')
-          # Both images (server + client) share the same sha- tags, so one query suffices.
+          # Every service image shares the same sha- tags, so one package is enough.
+          PACKAGE="${REFERENCE_PACKAGE:-${GITHUB_REPOSITORY##*/}-server}"
           RAW=$(curl --fail-with-body -sS \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/${OWNER}/packages/container/taskflow-server/versions?per_page=100") \
+            "https://api.github.com/users/${OWNER}/packages/container/${PACKAGE}/versions?per_page=100") \
             || RAW=""
           MOVING_SHA_TAG=$(echo "$RAW" | jq -r --arg t "$IMAGE_TAG" '
             [ .[]? | select(.metadata.container.tags | index($t))
