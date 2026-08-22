@@ -75,6 +75,28 @@ runs:
         env | grep -i '^RAILWAY' | sed 's/=.*/=<redacted>/' | sed 's/^/  /' || true
         echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
 
+        # TEMPORARY FORENSICS. Three recently-minted tokens have been rejected from
+        # the runner while two older ones work, and one of the rejected tokens was
+        # byte-verified identical to a value that authenticates from a laptop. So
+        # capture what actually differs: CLI build, raw API verdict, egress IP.
+        echo "--- railway CLI version on this runner ---"
+        npx --yes @railway/cli@latest --version 2>&1 | sed 's/^/  /' || true
+
+        # Hit Railway's API directly, bypassing the CLI entirely. This separates
+        # "the CLI cannot authenticate" from "Railway rejects this credential".
+        # Only the HTTP status is printed — never the token or the response body.
+        echo "--- raw Railway API auth probe (project-token header) ---"
+        API_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+          -X POST https://backboard.railway.app/graphql/v2 \
+          -H 'Content-Type: application/json' \
+          -H "Project-Access-Token: ${RAILWAY_TOKEN}" \
+          -d '{"query":"query { __typename }"}' || echo "000")
+        echo "  HTTP ${API_CODE}  (200 = credential accepted, 401/403 = rejected, 000 = unreachable)"
+
+        echo "--- runner egress IP (for a Railway support ticket) ---"
+        curl -s --max-time 10 https://api.ipify.org 2>/dev/null | sed 's/^/  /' || echo "  (unavailable)"
+        echo ""
+
         # `railway status` is the only probe worth running: it resolves the token to a
         # workspace/project/environment and lists the services it can actually see.
         #
