@@ -5,9 +5,9 @@
 [![Deploy → Staging](https://github.com/PramodKumarYadav/taskflow/actions/workflows/deploy-staging.yml/badge.svg)](https://github.com/PramodKumarYadav/taskflow/actions/workflows/deploy-staging.yml)
 [![Deploy → Production](https://github.com/PramodKumarYadav/taskflow/actions/workflows/deploy-production.yml/badge.svg)](https://github.com/PramodKumarYadav/taskflow/actions/workflows/deploy-production.yml)
 
-<a href="https://taskflow-ci-client.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_CI-open-6366f1?style=flat-square" alt="CI environment"></a>
-<a href="https://taskflow-staging-client.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_Staging-open-6366f1?style=flat-square" alt="Staging environment"></a>
-<a href="https://taskflow-production-client.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_Production-open-6366f1?style=flat-square" alt="Production environment"></a>
+<a href="https://taskflow-client-ci.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_CI-open-6366f1?style=flat-square" alt="CI environment"></a>
+<a href="https://taskflow-client-staging.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_Staging-open-6366f1?style=flat-square" alt="Staging environment"></a>
+<a href="https://taskflow-client-prod.up.railway.app/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%9A%80_Production-open-6366f1?style=flat-square" alt="Production environment"></a>
 
 A full-stack task management app built to demo **trunk-based development with feature toggles**.
 
