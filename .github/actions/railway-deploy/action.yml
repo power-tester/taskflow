@@ -47,7 +47,8 @@ runs:
       env:
         RAILWAY_TOKEN: ${{ inputs.railway_token }}
         SERVICE: ${{ inputs.service }}
-        RAILWAY_ENV: ${{ inputs.railway_env }}
+        # NOT "RAILWAY_ENV" — see the warning on the deploy step below.
+        DEPLOY_ENV: ${{ inputs.railway_env }}
       run: |
         # A missing secret is a hard failure: it means the token never reached this
         # action, which is a wiring bug rather than a credential problem.
@@ -57,79 +58,18 @@ runs:
           echo "RAILWAY_TOKEN is set on that GitHub Environment."
           exit 1
         fi
-        TARGET="taskflow-${SERVICE}-${RAILWAY_ENV}"
-        # TEMPORARY DIAGNOSTIC. The last-4 fingerprint only proved 4 of 36 chars, so a
-        # value with the right length and right suffix but a wrong character in the
-        # middle looked identical. A truncated SHA-256 compares ALL 36 characters and
-        # leaks nothing: 12 hex chars is 48 bits, useless for recovering a UUID.
-        # Compare locally with:
-        #   printf '%s' '<token>' | shasum -a 256 | cut -c1-12     # macOS
-        #   printf '%s' '<token>' | sha256sum     | cut -c1-12     # Linux
-        # Remove once staging is green.
-        TOKEN_HASH=$(printf '%s' "$RAILWAY_TOKEN" | sha256sum | cut -c1-12)
-        echo "RAILWAY_TOKEN present: ${#RAILWAY_TOKEN} chars, sha256 ${TOKEN_HASH}"
+        TARGET="taskflow-${SERVICE}-${DEPLOY_ENV}"
+        echo "Expecting service '${TARGET}' in Railway environment '${DEPLOY_ENV}'."
 
-        # If the hash matches but Railway still rejects it, the value is right and
-        # something else on the runner is interfering — so surface that here too.
-        echo "RAILWAY_* variables visible on this runner (values redacted):"
-        env | grep -i '^RAILWAY' | sed 's/=.*/=<redacted>/' | sed 's/^/  /' || true
-        echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
-
-        # TEMPORARY FORENSICS. Three recently-minted tokens have been rejected from
-        # the runner while two older ones work, and one of the rejected tokens was
-        # byte-verified identical to a value that authenticates from a laptop. So
-        # capture what actually differs: CLI build, raw API verdict, egress IP.
-        echo "--- railway CLI version on this runner ---"
-        npx --yes @railway/cli@latest --version 2>&1 | sed 's/^/  /' || true
-
-        # Hit Railway's API directly, bypassing the CLI, to separate "the CLI cannot
-        # authenticate" from "Railway rejects this credential".
-        #
-        # NOTE: HTTP status is useless here — GraphQL answers 200 even for auth
-        # failures, and `query { __typename }` needs no auth at all, so it returns 200
-        # for a literal garbage token. Inspect the response body instead, and run the
-        # same query with a known-bad token as a NEGATIVE CONTROL so the probe reports
-        # when it cannot distinguish anything.
-        gql() {
-          curl -s --max-time 20 -X POST https://backboard.railway.app/graphql/v2 \
-            -H 'Content-Type: application/json' \
-            -H "Project-Access-Token: $1" \
-            -d '{"query":"query { projectToken { projectId environmentId } }"}' 2>&1
-        }
-        verdict() { printf '%s' "$1" | grep -qi '"errors"' && echo "REJECTED" || echo "ACCEPTED"; }
-
-        REAL=$(gql "$RAILWAY_TOKEN"); REAL_V=$(verdict "$REAL")
-        CTRL=$(gql "00000000-0000-0000-0000-000000000000"); CTRL_V=$(verdict "$CTRL")
-
-        echo "--- raw Railway API auth probe ---"
-        echo "  real token   -> ${REAL_V}"
-        echo "  bogus token  -> ${CTRL_V}   (negative control)"
-        if [ "$REAL_V" = "$CTRL_V" ]; then
-          echo "  INCONCLUSIVE: the endpoint does not distinguish this token from garbage,"
-          echo "  so this probe proves nothing either way. Ignore it."
-        elif [ "$REAL_V" = "ACCEPTED" ]; then
-          echo "  => Railway accepts the credential. The CLI is where it breaks."
-        else
-          echo "  => Railway itself rejects the credential from this host."
-        fi
-        echo "  real-token response (truncated): $(printf '%s' "$REAL" | head -c 200)"
-
-        echo "--- runner egress IP (for a Railway support ticket) ---"
-        curl -s --max-time 10 https://api.ipify.org 2>/dev/null | sed 's/^/  /' || echo "  (unavailable)"
-        echo ""
-
-        # `railway status` is the only probe worth running: it resolves the token to a
-        # workspace/project/environment and lists the services it can actually see.
-        #
-        # Do NOT add `railway whoami` here. Project tokens are not tied to a user
-        # account, so it reports "Unauthorized. Please check that your RAILWAY_TOKEN
-        # is valid..." for tokens that deploy perfectly well — wording almost
-        # identical to a genuine auth failure, which sends debuggers the wrong way.
+        # `railway status` resolves the token to a workspace/project/environment and
+        # lists the services it can see. Do NOT add `railway whoami`: project tokens
+        # are not tied to a user account, so it reports "Unauthorized" for tokens that
+        # deploy perfectly well, in wording almost identical to a real auth failure.
         if ! STATUS=$(npx --yes @railway/cli@latest status 2>&1); then
           echo "$STATUS" | sed 's/^/  /'
-          echo "::error::railway status failed for environment '${RAILWAY_ENV}' — the token"
-          echo "is not accepted by Railway. Compare the fingerprint above with Railway ->"
-          echo "Project Settings -> Tokens; if it differs, the secret holds a stale value."
+          echo "::error::railway status failed for environment '${DEPLOY_ENV}'."
+          echo "Check the token in Railway -> Project Settings -> Tokens, and confirm"
+          echo "no RAILWAY_* variable is overriding the CLI's target backend."
           exit 1
         fi
         echo "$STATUS" | sed 's/^/  /'
@@ -137,7 +77,7 @@ runs:
         # Catches a renamed or deleted service before the deploy reports it obliquely.
         if ! printf '%s' "$STATUS" | grep -qF "$TARGET"; then
           echo "::warning::Service '${TARGET}' was not listed by railway status —"
-          echo "it may have been renamed or removed in the '${RAILWAY_ENV}' environment."
+          echo "it may have been renamed or removed in the '${DEPLOY_ENV}' environment."
         fi
 
     - name: Deploy ${{ inputs.service }} to Railway
@@ -148,7 +88,14 @@ runs:
         # directly into the shell script — prevents quote-breaking and command injection.
         IMAGE_TAG: ${{ inputs.image_tag }}
         SERVICE: ${{ inputs.service }}
-        RAILWAY_ENV: ${{ inputs.railway_env }}
+        # WARNING: this MUST NOT be named RAILWAY_ENV. The Railway CLI reserves that
+        # variable to select which Railway BACKEND to talk to, so RAILWAY_ENV=staging
+        # pointed the CLI at Railway's own staging API, where our token does not
+        # exist — every staging deploy failed with "Invalid RAILWAY_TOKEN" while the
+        # credential was provably valid. Values like "ci"/"production"/"dev" are not
+        # recognised backends and fell through to the default, which is the only
+        # reason those environments kept working.
+        DEPLOY_ENV: ${{ inputs.railway_env }}
         REPO_OWNER: ${{ github.repository_owner }}
       run: |
         OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
@@ -157,7 +104,7 @@ runs:
             echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
           fi
           IMAGE="ghcr.io/${OWNER}/taskflow-${SERVICE}:${IMAGE_TAG}"
-          echo "Deploying pre-built image ${IMAGE} → ${RAILWAY_ENV}..."
+          echo "Deploying pre-built image ${IMAGE} → ${DEPLOY_ENV}..."
           DEPLOY_DIR=$(mktemp -d)
           # Railway is configured with Dockerfile path 'packages/<service>/Dockerfile'.
           # The uploaded context must contain a file at that exact path.
@@ -165,12 +112,12 @@ runs:
           echo "FROM ${IMAGE}" > "$DEPLOY_DIR/packages/${SERVICE}/Dockerfile"
           cd "$DEPLOY_DIR"
         else
-          echo "Deploying from source for taskflow-${SERVICE}-${RAILWAY_ENV} → ${RAILWAY_ENV}..."
+          echo "Deploying from source for taskflow-${SERVICE}-${DEPLOY_ENV} → ${DEPLOY_ENV}..."
         fi
         # --detach is intentionally omitted: railway up blocks until Railway confirms
         # the new deployment is live, so the caller's health check is guaranteed to test
         # the new instance rather than the still-running old one.
         npx --yes @railway/cli@latest up \
-          --service "taskflow-${SERVICE}-${RAILWAY_ENV}" \
-          --environment "$RAILWAY_ENV"
+          --service "taskflow-${SERVICE}-${DEPLOY_ENV}" \
+          --environment "$DEPLOY_ENV"
         echo "${SERVICE} deploy complete."
