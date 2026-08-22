@@ -23,6 +23,10 @@ name: Build & Publish Docker Images
 on:
   push:
     branches: [main]
+  # Manual recovery path. A push whose head commit message contains the CI-skip
+  # marker produces no run at all, and there is otherwise no way to build the
+  # images for that commit without synthesizing an empty commit.
+  workflow_dispatch:
 
 permissions:
   contents: write # write needed so the update-deploy-options job can commit workflow changes

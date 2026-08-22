@@ -5,6 +5,9 @@ name: Deploy → ci
 on:
   push:
     branches: [main]
+  # Manual recovery path — see build-image.yml. Also useful to redeploy ci
+  # without pushing, e.g. after a Railway-side failure.
+  workflow_dispatch:
 
 permissions:
   pull-requests: write
