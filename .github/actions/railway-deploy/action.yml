@@ -1,11 +1,16 @@
 name: Railway deploy
 description: >
-  Deploy one taskflow service to Railway, either from source or from a pre-built GHCR image.
+  Deploy one service to Railway, either from source or from a pre-built container image.
 
-# Conventions this action assumes (same for every service):
-#   Railway service name : taskflow-<service>-<railway_env>
+# Naming conventions. Every one has a default that reproduces this repo's current
+# behaviour, so callers need change nothing; a different repo overrides only what
+# actually differs.
+#
+#   Railway service name : <project>-<service>-<railway_env>
+#   Container image      : <registry>/<owner>/<project>-<service>:<image_tag>
 #   Dockerfile path      : packages/<service>/Dockerfile
-#   Pre-built image      : ghcr.io/<owner>/taskflow-<service>:<image_tag>
+#
+# <project> defaults to this repository's name.
 #
 # There is no `sha` input by design. When image_tag is blank this action deploys
 # whatever is in the current working directory, so the CALLER is responsible for
@@ -15,14 +20,14 @@ description: >
 
 inputs:
   service:
-    description: Service short name (server | client). Drives the Railway service name, image name and Dockerfile path.
+    description: Service short name (e.g. server, client). Drives the default service name, image name and Dockerfile path.
     required: true
   railway_env:
     description: Railway environment name to deploy into (ci | dev | staging | production).
     required: true
   image_tag:
     description: |
-      Normalized image tag from GHCR (e.g. sha-abc1234) produced by build-image.yml.
+      Normalized image tag (e.g. sha-abc1234) produced by build-image.yml.
       Already undecorated by resolve-deploy-inputs — do NOT re-parse display forms here.
       When set, Railway deploys from the pre-built image; blank means build from source.
     required: false
@@ -31,14 +36,34 @@ inputs:
     description: Railway project token (Settings → Tokens in the Railway dashboard).
     required: true
 
+  # --- Naming, all optional. Blank means "derive the current convention". ---
+  project_slug:
+    description: Project prefix for service and image names. Defaults to the repository name.
+    required: false
+    default: ''
+  registry:
+    description: Container registry hosting the pre-built images.
+    required: false
+    default: ghcr.io
+  image_name:
+    description: Full image name without registry, owner or tag. Defaults to <project>-<service>.
+    required: false
+    default: ''
+  service_name:
+    description: Railway service to deploy into. Defaults to <project>-<service>-<railway_env>.
+    required: false
+    default: ''
+  dockerfile_path:
+    description: |
+      Dockerfile path Railway is configured to build, relative to the upload root.
+      The pre-built-image path recreates this exact path in a temp context so Railway
+      pulls the image instead of building. Defaults to packages/<service>/Dockerfile.
+    required: false
+    default: ''
+
 runs:
   using: composite
   steps:
-    # Deployment mode:
-    #   image_tag set               → deploy from a pre-built GHCR image (produced by build-image.yml).
-    #                                 A temporary directory with a minimal FROM-only Dockerfile is created
-    #                                 so Railway pulls the image rather than building from source.
-    #   image_tag blank or sentinel → Railway builds the Docker image itself via the Dockerfile (default).
     # Access preflight. Separates "the credential is wrong" from "the deploy itself
     # failed" — without it an auth failure surfaces only as a bare Railway error
     # after ~10s of npm output, indistinguishable from a deploy problem.
@@ -49,6 +74,8 @@ runs:
         SERVICE: ${{ inputs.service }}
         # NOT "RAILWAY_ENV" — see the warning on the deploy step below.
         DEPLOY_ENV: ${{ inputs.railway_env }}
+        PROJECT_SLUG: ${{ inputs.project_slug }}
+        SERVICE_NAME: ${{ inputs.service_name }}
       run: |
         # A missing secret is a hard failure: it means the token never reached this
         # action, which is a wiring bug rather than a credential problem.
@@ -58,7 +85,8 @@ runs:
           echo "RAILWAY_TOKEN is set on that GitHub Environment."
           exit 1
         fi
-        TARGET="taskflow-${SERVICE}-${DEPLOY_ENV}"
+        PROJECT="${PROJECT_SLUG:-${GITHUB_REPOSITORY##*/}}"
+        TARGET="${SERVICE_NAME:-${PROJECT}-${SERVICE}-${DEPLOY_ENV}}"
         echo "Expecting service '${TARGET}' in Railway environment '${DEPLOY_ENV}'."
 
         # `railway status` resolves the token to a workspace/project/environment and
@@ -80,6 +108,11 @@ runs:
           echo "it may have been renamed or removed in the '${DEPLOY_ENV}' environment."
         fi
 
+    # Deployment mode:
+    #   image_tag set   → deploy a pre-built image. A temp directory containing a
+    #                     minimal FROM-only Dockerfile at the configured path is
+    #                     created so Railway pulls the image rather than building.
+    #   image_tag blank → Railway builds the image itself from the working directory.
     - name: Deploy ${{ inputs.service }} to Railway
       shell: bash
       env:
@@ -97,27 +130,37 @@ runs:
         # reason those environments kept working.
         DEPLOY_ENV: ${{ inputs.railway_env }}
         REPO_OWNER: ${{ github.repository_owner }}
+        PROJECT_SLUG: ${{ inputs.project_slug }}
+        REGISTRY: ${{ inputs.registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        SERVICE_NAME: ${{ inputs.service_name }}
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
       run: |
         OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+        PROJECT="${PROJECT_SLUG:-${GITHUB_REPOSITORY##*/}}"
+        TARGET="${SERVICE_NAME:-${PROJECT}-${SERVICE}-${DEPLOY_ENV}}"
+        IMAGE_BASE="${IMAGE_NAME:-${PROJECT}-${SERVICE}}"
+        DOCKERFILE="${DOCKERFILE_PATH:-packages/${SERVICE}/Dockerfile}"
+
         if [ -n "$IMAGE_TAG" ]; then
           if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
             echo "Invalid image_tag '$IMAGE_TAG' (allowed: letters, numbers, ., _, -)"; exit 1
           fi
-          IMAGE="ghcr.io/${OWNER}/taskflow-${SERVICE}:${IMAGE_TAG}"
+          IMAGE="${REGISTRY}/${OWNER}/${IMAGE_BASE}:${IMAGE_TAG}"
           echo "Deploying pre-built image ${IMAGE} → ${DEPLOY_ENV}..."
           DEPLOY_DIR=$(mktemp -d)
-          # Railway is configured with Dockerfile path 'packages/<service>/Dockerfile'.
-          # The uploaded context must contain a file at that exact path.
-          mkdir -p "$DEPLOY_DIR/packages/${SERVICE}"
-          echo "FROM ${IMAGE}" > "$DEPLOY_DIR/packages/${SERVICE}/Dockerfile"
+          # Railway is configured with a specific Dockerfile path; the uploaded
+          # context must contain a file at that exact path.
+          mkdir -p "$DEPLOY_DIR/$(dirname "$DOCKERFILE")"
+          echo "FROM ${IMAGE}" > "$DEPLOY_DIR/${DOCKERFILE}"
           cd "$DEPLOY_DIR"
         else
-          echo "Deploying from source for taskflow-${SERVICE}-${DEPLOY_ENV} → ${DEPLOY_ENV}..."
+          echo "Deploying from source for ${TARGET} → ${DEPLOY_ENV}..."
         fi
         # --detach is intentionally omitted: railway up blocks until Railway confirms
         # the new deployment is live, so the caller's health check is guaranteed to test
         # the new instance rather than the still-running old one.
         npx --yes @railway/cli@latest up \
-          --service "taskflow-${SERVICE}-${DEPLOY_ENV}" \
+          --service "${TARGET}" \
           --environment "$DEPLOY_ENV"
         echo "${SERVICE} deploy complete."
