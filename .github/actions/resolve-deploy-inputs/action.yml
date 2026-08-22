@@ -27,6 +27,11 @@ inputs:
     description: Raw sha dispatch input as typed by the user. Empty means "not supplied".
     required: false
     default: ''
+  github_token:
+    description: >
+      Token used to read GHCR package metadata when resolving a moving tag such as
+      "latest" back to the commit its image was built from. Needs `packages: read`.
+    required: true
 
 outputs:
   sha:
@@ -49,6 +54,8 @@ runs:
         # Raw values via env: so they are never interpolated into the script text.
         IMAGE_TAG_RAW: ${{ inputs.image_tag }}
         SHA_RAW: ${{ inputs.sha }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        PKG_OWNER: ${{ github.repository_owner }}
       run: |
         # ---- normalize ------------------------------------------------------
         # Strip display date suffix: "sha-abc1234 (2026-06-06)" → "sha-abc1234"
@@ -75,6 +82,35 @@ runs:
         SHORT_SHA_FROM_TAG=$(echo "$IMAGE_TAG" | sed -n 's/^sha-\([a-f0-9]*\).*/\1/p')
         if [ -n "$SHORT_SHA_FROM_TAG" ]; then
           SHA=$(git rev-parse --verify "${SHORT_SHA_FROM_TAG}^{commit}")
+        elif [ -n "$IMAGE_TAG" ]; then
+          # Moving tag (e.g. "latest"): it carries no commit of its own, so ask GHCR which
+          # sha-* tag shares the same image version and attribute the deploy to that commit.
+          #
+          # Falling back to HEAD here is WRONG. build-image.yml pushes a "[skip ci]" chore
+          # commit to main after every build, so HEAD is routinely a commit that was never
+          # built into an image and never went through a PR. Attributing the deploy to it
+          # makes listPullRequestsAssociatedWithCommit return nothing, which silently skips
+          # the PR comment and the "deployed: <env>" label, and tags the GitHub Release
+          # against the wrong commit.
+          OWNER=$(echo "$PKG_OWNER" | tr '[:upper:]' '[:lower:]')
+          # Both images (server + client) share the same sha- tags, so one query suffices.
+          RAW=$(curl --fail-with-body -sS \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${OWNER}/packages/container/taskflow-server/versions?per_page=100") \
+            || RAW=""
+          MOVING_SHA_TAG=$(echo "$RAW" | jq -r --arg t "$IMAGE_TAG" '
+            [ .[]? | select(.metadata.container.tags | index($t))
+                   | .metadata.container.tags[] | select(startswith("sha-")) ]
+            | first // empty' 2>/dev/null)
+          if [ -z "$MOVING_SHA_TAG" ]; then
+            echo "Error: could not determine which commit image tag '${IMAGE_TAG}' points to."
+            echo "GHCR did not report a sha-* tag sharing a version with '${IMAGE_TAG}'."
+            echo "Re-run the deploy selecting an explicit sha-* image tag instead."
+            exit 1
+          fi
+          echo "Moving tag '${IMAGE_TAG}' resolves to image tag '${MOVING_SHA_TAG}'."
+          SHA=$(git rev-parse --verify "${MOVING_SHA_TAG#sha-}^{commit}")
         elif [ -n "$SHA_RAW" ]; then
           SHA=$(git rev-parse --verify "${SHA_RAW}^{commit}")
         else
