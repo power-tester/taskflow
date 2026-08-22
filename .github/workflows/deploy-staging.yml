@@ -9,7 +9,7 @@ on:
         required: false
         default: 'latest'
         type: choice
-        options: ["latest", "(build from source)", "sha-fb3f6ae (2026-08-20)", "sha-009a922 (2026-08-20)", "sha-35fc996 (2026-06-06)", "sha-92bf788 (2026-06-06)", "sha-993599a (2026-08-20)", "sha-bdbd07a (2026-08-20)", "sha-c280978 (2026-06-07)", "sha-f83630a (2026-08-20)"]
+        options: ["latest", "(build from source)", "sha-3f7f336 (2026-08-22)", "sha-009a922 (2026-08-20)", "sha-35fc996 (2026-06-06)", "sha-92bf788 (2026-06-06)", "sha-993599a (2026-08-20)", "sha-bdbd07a (2026-08-20)", "sha-c280978 (2026-06-07)", "sha-f83630a (2026-08-20)", "sha-fb3f6ae (2026-08-20)"]
       sha:
         description: Commit SHA to build from (only used when image tag is "(build from source)")
         required: false
