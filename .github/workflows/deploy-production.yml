@@ -27,6 +27,7 @@ on:
 permissions:
   pull-requests: write
   contents: write # needed for create-release
+  packages: read # resolve-deploy-inputs reads GHCR metadata to resolve moving tags
 jobs:
   resolve:
     name: Validate & resolve inputs
@@ -47,6 +48,7 @@ jobs:
           # RAW dispatch input — the resolve action is what normalizes it.
           image_tag: ${{ inputs.image_tag }}
           sha: ${{ inputs.sha }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
   deploy-production:
     needs: resolve
     name: Deploy to Production

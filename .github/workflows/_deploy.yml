@@ -130,6 +130,13 @@ jobs:
               commit_sha: sha,
             });
 
+            // A deploy attributed to a commit with no associated PR is worth surfacing:
+            // it usually means the wrong commit was resolved, and the step would
+            // otherwise pass green having notified nobody.
+            if (prs.data.length === 0) {
+              core.warning(`No pull request is associated with ${sha.slice(0,7)} — no deploy comment posted.`);
+            }
+
             for (const pr of prs.data) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -137,6 +144,7 @@ jobs:
                 issue_number: pr.number,
                 body,
               });
+              console.log(`Commented on PR #${pr.number}.`);
             }
 
       - name: Label PR with deployed environment
@@ -182,6 +190,10 @@ jobs:
               }
             }
 
+            if (prs.data.length === 0) {
+              core.warning(`No pull request is associated with ${sha.slice(0,7)} — "${labelName}" was not applied to any PR.`);
+            }
+
             for (const pr of prs.data) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
@@ -189,4 +201,5 @@ jobs:
                 issue_number: pr.number,
                 labels: [labelName],
               });
+              console.log(`Applied "${labelName}" to PR #${pr.number}.`);
             }
