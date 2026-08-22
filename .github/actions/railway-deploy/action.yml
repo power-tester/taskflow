@@ -75,6 +75,49 @@ runs:
         env | grep -i '^RAILWAY' | sed 's/=.*/=<redacted>/' | sed 's/^/  /' || true
         echo "Expecting service '${TARGET}' in Railway environment '${RAILWAY_ENV}'."
 
+        # TEMPORARY FORENSICS. Three recently-minted tokens have been rejected from
+        # the runner while two older ones work, and one of the rejected tokens was
+        # byte-verified identical to a value that authenticates from a laptop. So
+        # capture what actually differs: CLI build, raw API verdict, egress IP.
+        echo "--- railway CLI version on this runner ---"
+        npx --yes @railway/cli@latest --version 2>&1 | sed 's/^/  /' || true
+
+        # Hit Railway's API directly, bypassing the CLI, to separate "the CLI cannot
+        # authenticate" from "Railway rejects this credential".
+        #
+        # NOTE: HTTP status is useless here — GraphQL answers 200 even for auth
+        # failures, and `query { __typename }` needs no auth at all, so it returns 200
+        # for a literal garbage token. Inspect the response body instead, and run the
+        # same query with a known-bad token as a NEGATIVE CONTROL so the probe reports
+        # when it cannot distinguish anything.
+        gql() {
+          curl -s --max-time 20 -X POST https://backboard.railway.app/graphql/v2 \
+            -H 'Content-Type: application/json' \
+            -H "Project-Access-Token: $1" \
+            -d '{"query":"query { projectToken { projectId environmentId } }"}' 2>&1
+        }
+        verdict() { printf '%s' "$1" | grep -qi '"errors"' && echo "REJECTED" || echo "ACCEPTED"; }
+
+        REAL=$(gql "$RAILWAY_TOKEN"); REAL_V=$(verdict "$REAL")
+        CTRL=$(gql "00000000-0000-0000-0000-000000000000"); CTRL_V=$(verdict "$CTRL")
+
+        echo "--- raw Railway API auth probe ---"
+        echo "  real token   -> ${REAL_V}"
+        echo "  bogus token  -> ${CTRL_V}   (negative control)"
+        if [ "$REAL_V" = "$CTRL_V" ]; then
+          echo "  INCONCLUSIVE: the endpoint does not distinguish this token from garbage,"
+          echo "  so this probe proves nothing either way. Ignore it."
+        elif [ "$REAL_V" = "ACCEPTED" ]; then
+          echo "  => Railway accepts the credential. The CLI is where it breaks."
+        else
+          echo "  => Railway itself rejects the credential from this host."
+        fi
+        echo "  real-token response (truncated): $(printf '%s' "$REAL" | head -c 200)"
+
+        echo "--- runner egress IP (for a Railway support ticket) ---"
+        curl -s --max-time 10 https://api.ipify.org 2>/dev/null | sed 's/^/  /' || echo "  (unavailable)"
+        echo ""
+
         # `railway status` is the only probe worth running: it resolves the token to a
         # workspace/project/environment and lists the services it can actually see.
         #
