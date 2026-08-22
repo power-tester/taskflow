@@ -49,7 +49,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.sha || github.ref }}
+          # The local composite actions below are read from this checkout, so the tree
+          # must contain .github/actions. When deploying a PRE-BUILT IMAGE the source
+          # is never used — railway-deploy synthesizes a FROM-only build context in a
+          # temp dir — so check out the ref running this workflow, which always has
+          # them. Checking out the image's own commit instead breaks every deploy of
+          # an image built before those actions existed.
+          # Only a source build needs the specific commit.
+          ref: ${{ inputs.image_tag != '' && github.ref || inputs.sha || github.ref }}
           fetch-depth: 0
 
       # The per-service deploy logic (source vs pre-built image) lives in the local
