@@ -69,23 +69,48 @@ jobs:
     runs-on: ubuntu-latest
     if: success()
     permissions:
-      contents: write
+      contents: read # only covers the checkout; the App token performs the release write
     steps:
+      # GITHUB_TOKEN gets "Resource not accessible by integration" (403) on
+      # POST /repos/{owner}/{repo}/releases despite holding Contents: write.
+      # Use the same GitHub App that build-image.yml already uses for privileged
+      # writes — it is a bypass actor on the main ruleset and its installation
+      # carries Contents: write. See docs/GITHUB_APP_SERVICE_TOKEN.md.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          # Org-level, scoped to selected repositories.
+          app-id: ${{ vars.WORKFLOW_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.sha }}
+
       - name: Generate tag name
         id: tag
+        env:
+          SHORT_SHA: ${{ needs.resolve.outputs.short_sha }}
         run: |
-          TAG="v$(date +'%Y.%m.%d')-${{ needs.resolve.outputs.short_sha }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "tag=v$(date +'%Y.%m.%d')-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: actions/github-script@v7
+        env:
+          # Passed via env: so no value is interpolated into the script body.
+          # release_notes is user-supplied through workflow_dispatch; interpolating
+          # it into a template literal let a backtick or ${...} run arbitrary JS
+          # with this step's token.
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const sha = '${{ needs.resolve.outputs.sha }}';
-            const tag = '${{ steps.tag.outputs.tag }}';
-            const notes = `${{ inputs.release_notes }}` || `Production deploy of ${sha.slice(0,7)}`;
+            const sha = process.env.SHA;
+            const tag = process.env.TAG;
+            const notes = process.env.RELEASE_NOTES || `Production deploy of ${sha.slice(0, 7)}`;
 
             await github.rest.repos.createRelease({
               owner: context.repo.owner,
