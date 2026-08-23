@@ -58,6 +58,8 @@ jobs:
     with:
       environment: production
       railway_env: production
+      # server and client have no ordering relationship, so deploy them concurrently.
+      max_parallel: 2
       sha: ${{ needs.resolve.outputs.sha }}
       image_tag: ${{ needs.resolve.outputs.image_tag }}
     secrets:
