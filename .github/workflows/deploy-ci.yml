@@ -19,6 +19,8 @@ jobs:
     with:
       environment: ci
       railway_env: ci
+      # server and client have no ordering relationship, so deploy them concurrently.
+      max_parallel: 2
     secrets:
       # Set in GitHub → Settings → Environments → ci → Secrets
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

@@ -60,16 +60,31 @@ on:
         required: false
         type: string
         default: packages/{0}/Dockerfile
-      health_url:
-        description: Base URL for the post-deploy health check. Defaults to the environment's SERVER_URL variable.
+      health_checks:
+        description: |
+          JSON map of service name to the path probed after that service deploys,
+          e.g. '{"server":"/health","client":"/"}'. A service absent from the map is
+          not health checked. Paths differ per service because a web front end rarely
+          serves the same endpoint as an API.
         required: false
         type: string
-        default: ''
-      health_path:
-        description: Path appended to health_url for the health check.
+        default: '{"server":"/health","client":"/"}'
+      health_urls:
+        description: |
+          JSON map of service name to base URL, overriding the convention below.
+          When a service is absent, its URL is read from the environment variable
+          <SERVICE>_URL — server -> SERVER_URL, client -> CLIENT_URL.
         required: false
         type: string
-        default: /health
+        default: '{}'
+      max_parallel:
+        description: |
+          How many services deploy at once. 1 deploys them in series, which is the
+          safe default when one service depends on another being up. Raise it (or set
+          it to the number of services) when they are independent.
+        required: false
+        type: number
+        default: 1
       app_url:
         description: User-facing URL shown in the summary and PR comment. Defaults to the environment's CLIENT_URL variable.
         required: false
@@ -94,16 +109,13 @@ jobs:
     # rather than every job in the chain.
     environment: ${{ inputs.environment }}
     strategy:
-      # One at a time, matching the sequential server-then-client order this
-      # replaced. Raise it if the services have no ordering relationship.
-      max-parallel: 1
+      max-parallel: ${{ inputs.max_parallel }}
       matrix:
         service: ${{ fromJSON(inputs.services) }}
     outputs:
       # Environment vars are only readable from a job that declares the environment,
       # so resolve them here and hand them to the ungated jobs below. Every matrix
-      # leg writes the same values, so last-writer-wins is deterministic.
-      health_url: ${{ steps.urls.outputs.health_url }}
+      # leg writes the same value, so last-writer-wins is deterministic.
       app_url: ${{ steps.urls.outputs.app_url }}
 
     steps:
@@ -123,13 +135,9 @@ jobs:
       - name: Resolve environment URLs
         id: urls
         env:
-          HEALTH_URL: ${{ inputs.health_url || vars.SERVER_URL }}
           APP_URL: ${{ inputs.app_url || vars.CLIENT_URL }}
         run: |
-          {
-            echo "health_url=${HEALTH_URL}"
-            echo "app_url=${APP_URL}"
-          } >> "$GITHUB_OUTPUT"
+          echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
 
       # The per-service deploy logic (source vs pre-built image) lives in the local
       # composite action so the services cannot drift apart.
@@ -144,47 +152,68 @@ jobs:
           registry: ${{ inputs.registry }}
           dockerfile_path: ${{ format(inputs.dockerfile_path_template, matrix.service) }}
 
-  verify:
-    name: Health check & summary
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Health check
+      - name: Health check (${{ matrix.service }})
         env:
-          HEALTH_PATH: ${{ inputs.health_path }}
-          BASE_URL_RAW: ${{ needs.deploy.outputs.health_url }}
+          SERVICE: ${{ matrix.service }}
+          HEALTH_CHECKS: ${{ inputs.health_checks }}
+          HEALTH_URLS: ${{ inputs.health_urls }}
+          # Serialising the whole context avoids dynamic vars[...] indexing and lets
+          # the URL be looked up by a name computed at runtime. Variables are not
+          # secrets, and the value is never printed.
+          ALL_VARS: ${{ toJSON(vars) }}
         run: |
-          # railway up (without --detach) already confirmed each deployment is live.
-          # This is a final HTTP smoke test to verify the endpoint is reachable from
-          # the GitHub Actions runner and returns a healthy response.
-          if [ -z "${BASE_URL_RAW:-}" ]; then
-            echo "::warning::No health URL configured (health_url input / SERVER_URL variable) — skipping."
+          PROBE_PATH=$(printf '%s' "$HEALTH_CHECKS" | jq -r --arg s "$SERVICE" '.[$s] // empty')
+          if [ -z "$PROBE_PATH" ]; then
+            echo "No health check configured for '${SERVICE}' — skipping."
             exit 0
           fi
+
+          BASE=$(printf '%s' "$HEALTH_URLS" | jq -r --arg s "$SERVICE" '.[$s] // empty')
+          if [ -z "$BASE" ]; then
+            # Convention: service "server" -> SERVER_URL, "web-app" -> WEB_APP_URL.
+            VAR_NAME="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_URL"
+            BASE=$(printf '%s' "$ALL_VARS" | jq -r --arg k "$VAR_NAME" '.[$k] // empty')
+            [ -n "$BASE" ] && echo "Resolved URL for '${SERVICE}' from variable ${VAR_NAME}."
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::warning::No URL for '${SERVICE}' (health_urls input or <SERVICE>_URL variable) — skipping its health check."
+            exit 0
+          fi
+
+          # railway up (without --detach) already confirmed the deployment is live.
+          # This is a final HTTP smoke test from the runner.
+          BASE="${BASE%/}"
           DEADLINE=$(( $(date +%s) + 60 ))  # allow up to 1 minute for DNS/LB propagation
-          INTERVAL=5
-          BASE_URL="${BASE_URL_RAW%/}"  # strip any trailing slash
           while true; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${HEALTH_PATH}" || echo "000")
-            echo "Health check ${BASE_URL}${HEALTH_PATH} → $STATUS ($(( DEADLINE - $(date +%s) ))s remaining)"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${PROBE_PATH}" || echo "000")
+            echo "Health check ${BASE}${PROBE_PATH} → $STATUS ($(( DEADLINE - $(date +%s) ))s remaining)"
             if [ "$STATUS" = "200" ]; then
-              echo "✅ Health check passed."
+              echo "✅ ${SERVICE} healthy."
               exit 0
             fi
             if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-              echo "❌ Health check timed out — last status: $STATUS"
+              echo "::error::${SERVICE} health check timed out — last status: $STATUS"
               exit 1
             fi
-            sleep $INTERVAL
+            sleep 5
           done
 
-      - name: Summary
-        if: ${{ always() }}
+  summary:
+    # Once per deploy, not once per service. No environment declared: it reads the
+    # app URL from the deploy job's outputs, so adding required reviewers gates the
+    # deploy alone rather than every job in the chain.
+    name: Summary
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Write step summary
         env:
           APP_URL: ${{ needs.deploy.outputs.app_url }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           {
-            echo "## Deploy to ${{ inputs.environment }} complete"
+            echo "## Deploy to ${{ inputs.environment }} — ${DEPLOY_RESULT}"
             echo ""
             echo "| | |"
             echo "|---|---|"
@@ -199,7 +228,7 @@ jobs:
 
   notify-pr:
     name: Notify PR
-    needs: [deploy, verify]
+    needs: [deploy, summary]
     runs-on: ubuntu-latest
     # No environment: the URL comes from the deploy job's outputs, so this job needs
     # no environment-scoped variables and stays outside any approval gate.
@@ -213,8 +242,9 @@ jobs:
             const sha = '${{ inputs.sha }}' || context.sha;
             // Report the overall outcome: a green deploy with a failed health check
             // is not a successful release.
-            const status = ('${{ needs.deploy.result }}' === 'success'
-                         && '${{ needs.verify.result }}' === 'success') ? 'success' : 'failure';
+            // The health checks live inside the deploy job, so its result already
+            // reflects them.
+            const status = '${{ needs.deploy.result }}';
             const emoji = status === 'success' ? '✅' : '❌';
             const env = '${{ inputs.environment }}';
             const body = `${emoji} **${env} deploy** ${status} for \`${sha.slice(0,7)}\`\n\nEnvironment: ${env} | [View app](${{ needs.deploy.outputs.app_url }})`;
@@ -244,7 +274,7 @@ jobs:
 
       - name: Label PR with deployed environment
         uses: actions/github-script@v7
-        if: ${{ needs.deploy.result == 'success' && needs.verify.result == 'success' }}
+        if: ${{ needs.deploy.result == 'success' }}
         env:
           LABEL_COLORS: ${{ inputs.label_colors }}
         with:
