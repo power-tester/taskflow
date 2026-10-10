@@ -29,7 +29,7 @@ jobs:
       image_tag: ${{ steps.resolve.outputs.image_tag }}
     steps:
       # fetch-depth: 0 so resolve-deploy-inputs can rev-parse a short SHA from a sha-* tag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
