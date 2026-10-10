@@ -97,7 +97,7 @@ jobs:
         run: |
           echo "tag=v$(date +'%Y.%m.%d')-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
       - name: Create Release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           # Passed via env: so no value is interpolated into the script body.
           # release_notes is user-supplied through workflow_dispatch; interpolating
