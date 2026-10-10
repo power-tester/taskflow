@@ -15,7 +15,7 @@ A step-by-step walkthrough for presenting TaskFlow's trunk-based development and
 Key points to set the scene:
 - Single trunk (`main`) — all engineers commit here
 - Feature flags replace feature branches for incomplete or risky work
-- Four environments with different flag states: local → dev → staging → production
+- Four environments with different flag states: development (local) → ci → staging → production
 
 ---
 
@@ -23,7 +23,7 @@ Key points to set the scene:
 
 Open `feature-flags/src/config/` in your editor. Show all four JSON files side by side.
 
-> "This is the entire flag configuration. In local everything is on — that's our full feature set. In dev, dark mode and AI suggestions are off because they're still in progress. In staging we have four flags. In production, only two."
+> "This is the entire flag configuration. `flags.default.json` is the registry; the other files are per-environment overlays. In development everything is on — that's our full feature set. In ci, dark mode and AI suggestions are off because they're still in progress. In staging we have four flags. In production, only two."
 
 Key file to show: `feature-flags/src/types.ts`
 
@@ -44,7 +44,7 @@ const provider: Provider = new ConfigFileProvider();
 
 ```bash
 # In packages/server/.env
-NODE_ENV=local
+NODE_ENV=development
 ```
 
 Log in, show:
@@ -79,7 +79,7 @@ Show what disappeared:
 ```bash
 curl http://localhost:4000/api/tasks/export/csv
 # With NODE_ENV=production → 404
-# With NODE_ENV=local → CSV download
+# With NODE_ENV=development → CSV download
 ```
 
 > "The server returns 404 — the endpoint doesn't exist from the client's perspective. It's not 403 Forbidden, it's invisible."
@@ -93,9 +93,9 @@ curl http://localhost:4000/api/tasks/export/csv
 Walk through the flow:
 
 1. Developer adds code behind `isEnabled('AI_SUGGESTIONS')` check
-2. `flags.production.json` — `AI_SUGGESTIONS: false`
-3. Code ships in every deploy to dev, staging, production — but the feature is invisible
-4. When ready, change `flags.production.json` to `true`, open a PR, merge
+2. `flags.production.json` — leaves `AI_SUGGESTIONS` at its default, `enabled: false`
+3. Code ships in every deploy to ci, staging, production — but the feature is invisible
+4. When ready, add `"AI_SUGGESTIONS": { "enabled": true }` to `flags.production.json`, open a PR, merge
 5. Feature appears in production with the next deploy
 
 Show the React side:
@@ -120,16 +120,21 @@ router.post('/suggest', featureGate('AI_SUGGESTIONS'), suggestHandler);
 
 Open `.github/workflows/`:
 
-- `ci.yml` — show the PR checks: lint, typecheck, test, build
-- `deploy-dev.yml` — show it triggers on push to main; calls the reusable `_deploy.yml`
-- `deploy-staging.yml` — show the SHA input and the PR comment step
-- `deploy-production.yml` — show the `environment: production` line
+- `pr.yml` — show the PR checks: lint, typecheck, test, build
+- `deploy-ci.yml` — show it triggers on push to main and contains no deploy logic of its own: it calls the shared deploy workflow with `environment: ci`
+- `build-image.yml` — also on push to main; publishes the server and client images to GHCR and refreshes the image dropdown in the two manual workflows
+- `deploy-staging.yml` — show the `image_tag` dropdown of recent builds and the `resolve` job
+- `deploy-production.yml` — show the `environment: production` line and the release job
 
 > "Production has a GitHub Environment with a required reviewer. No code reaches production without a human approving the deployment in GitHub Actions."
 
-Show `_deploy.yml` (reusable workflow):
+Open [power-tester/deploy-workflows](https://github.com/power-tester/deploy-workflows) and show `deploy.yml`:
 
-> "All three deploy targets use the same steps — install, build, hit the Render deploy hook, wait for the health check. DRY deployment code."
+> "All three deploy targets, and every other repository we deploy this way, use the same steps — deploy each service to Railway, health check it, write a summary, comment on and label the PR. It lives in one shared repository, and each product repo pins a major version. Deploy behaviour changes there; environments, services and tokens stay here."
+
+Show the staging run's PR comment and the `deployed: staging` label:
+
+> "Every deploy reports back to the PR that introduced the commit, so the trail from merge to environment is in one place."
 
 ---
 
@@ -138,14 +143,14 @@ Show `_deploy.yml` (reusable workflow):
 > "When we decide to release TASK_PRIORITY to production, it's a one-line JSON change — no feature branch merge, no cherry-pick, no code freeze."
 
 ```json
-// Before
-{ "TASK_PRIORITY": false }
+// Before — flags.production.json
+{}
 
 // After
-{ "TASK_PRIORITY": true }
+{ "TASK_PRIORITY": { "enabled": true } }
 ```
 
-> "Open a PR, CI runs, merge, auto-deploys to dev, we verify, promote to staging, promote to production with approval. The feature is live."
+> "Open a PR, CI runs, merge, auto-deploys to ci, we verify, promote to staging, promote to production with approval. The feature is live."
 
 ---
 
@@ -155,9 +160,12 @@ Show `_deploy.yml` (reusable workflow):
 
 **Kill-switch** (flag issue):
 ```json
-{ "TASK_PRIORITY": false }
+{ "TASK_PRIORITY": { "enabled": false } }
 ```
 Merge, promote — feature off in minutes without a code deployment.
+
+**Redeploy the previous image** (bad build):
+Re-run the deploy workflow and pick the previous `sha-` tag from the dropdown. Nothing is rebuilt; the image that was running before is deployed again.
 
 **Code revert** (actual bug):
 ```bash

@@ -209,6 +209,8 @@ See [docs/TRUNK_BASED_DEV.md](docs/TRUNK_BASED_DEV.md) for the full trunk-based 
 | `deploy-staging.yml`    | Manual (commit SHA input)     | Promotes a specific commit to staging          |
 | `deploy-production.yml` | Manual + environment approval | Promotes to prod and creates a GitHub Release  |
 
+The three `deploy-*.yml` workflows are thin callers: the deploy pipeline itself (Railway deploy per service, health checks, step summary, PR comment and label) is the shared reusable workflow in [power-tester/deploy-workflows](https://github.com/power-tester/deploy-workflows), pinned to its `v1` major tag. Change deploy behaviour there; change environments, services and tokens here.
+
 ---
 
 ## GitHub Secrets & Variables Required

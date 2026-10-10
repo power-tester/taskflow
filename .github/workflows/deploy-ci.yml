@@ -10,12 +10,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  pull-requests: write
+  contents: read # actions/checkout inside the shared deploy workflow
+  pull-requests: write # notify-pr comments on and labels the associated PR
 
 jobs:
-  deploy-dev:
+  deploy-ci:
     name: Deploy to ci
-    uses: ./.github/workflows/_deploy.yml
+    # The deploy pipeline itself lives in power-tester/deploy-workflows; this
+    # workflow only supplies the environment-specific inputs and the token.
+    uses: power-tester/deploy-workflows/.github/workflows/deploy.yml@v1
     with:
       environment: ci
       railway_env: ci

@@ -1,6 +1,7 @@
 name: Deploy → Staging
-# Manual promotion. Specify the commit SHA to deploy (defaults to HEAD of main).
-# Typical use: after QA in dev signs off, engineer manually runs this workflow.
+# Manual promotion. Pick a pre-built image tag (defaults to latest), or choose
+# "(build from source)" and give a commit SHA (defaults to HEAD of main).
+# Typical use: after QA in ci signs off, an engineer manually runs this workflow.
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +16,7 @@ on:
         required: false
         default: ''
 permissions:
-  contents: read # actions/checkout in the resolve job and in _deploy.yml
+  contents: read # actions/checkout in the resolve job and in the shared deploy workflow
   pull-requests: write # notify-pr comments on and labels the associated PR
   packages: read # resolve-deploy-inputs reads GHCR metadata to resolve moving tags
 jobs:
@@ -33,7 +34,7 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
       - id: resolve
-        uses: ./.github/actions/resolve-deploy-inputs
+        uses: power-tester/deploy-workflows/.github/actions/resolve-deploy-inputs@v1
         with:
           # RAW dispatch input — the resolve action is what normalizes it.
           image_tag: ${{ inputs.image_tag }}
@@ -42,7 +43,9 @@ jobs:
   deploy-staging:
     needs: resolve
     name: Deploy to Staging
-    uses: ./.github/workflows/_deploy.yml
+    # The deploy pipeline itself lives in power-tester/deploy-workflows; this
+    # workflow only supplies the environment-specific inputs and the token.
+    uses: power-tester/deploy-workflows/.github/workflows/deploy.yml@v1
     with:
       environment: staging
       railway_env: staging
