@@ -43,7 +43,7 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
       - id: resolve
-        uses: ./.github/actions/resolve-deploy-inputs
+        uses: power-tester/deploy-workflows/.github/actions/resolve-deploy-inputs@v1
         with:
           # RAW dispatch input — the resolve action is what normalizes it.
           image_tag: ${{ inputs.image_tag }}
@@ -54,7 +54,9 @@ jobs:
     name: Deploy to Production
     # ← This references the GitHub Environment "production".
     # GitHub will pause here and require reviewer approval before continuing.
-    uses: ./.github/workflows/_deploy.yml
+    # The deploy pipeline itself lives in power-tester/deploy-workflows; this
+    # workflow only supplies the environment-specific inputs and the token.
+    uses: power-tester/deploy-workflows/.github/workflows/deploy.yml@v1
     with:
       environment: production
       railway_env: production

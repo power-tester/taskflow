@@ -1,0 +1,9 @@
+# Keeps the `uses:` pins in .github/workflows current. In particular, the deploy
+# workflows pin power-tester/deploy-workflows@v1; a new major there arrives as a
+# pull request here rather than as a silent behaviour change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

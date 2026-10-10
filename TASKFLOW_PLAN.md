@@ -1,5 +1,14 @@
 # TaskFlow — Trunk-Based Development + Feature Toggles Demo
 
+> **Historical document.** This is the original build plan, kept as written. The
+> implementation has since moved on in two ways: hosting is Railway, not Render
+> (see [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md)), and the deploy
+> pipeline is the shared reusable workflow in
+> [power-tester/deploy-workflows](https://github.com/power-tester/deploy-workflows)
+> rather than a local `_deploy.yml`. The `ci.yml` and `deploy-dev.yml` named below
+> are `pr.yml` and `deploy-ci.yml` today. For the current pipeline see
+> [docs/TRUNK_BASED_DEV.md](docs/TRUNK_BASED_DEV.md).
+
 **Stack**: React + TypeScript (Vite), Express + TypeScript, MongoDB Atlas / Docker  
 **Deployment**: Render (PaaS) — 3 separate services: `taskflow-dev`, `taskflow-staging`, `taskflow-prod`  
 **Auth**: JWT (enables per-user flag demo potential)  

@@ -11,8 +11,8 @@ TaskFlow is built on trunk-based development (TBD): all engineers commit to a si
 | One trunk | All work merges to `main`; no `develop` or `release` branches |
 | Short-lived branches | Feature branches live ≤ 2 days; PR → review → merge |
 | Feature toggles as the gate | Incomplete features ship behind a flag that's off in production |
-| CI on every commit | Lint + type-check + build runs on every PR |
-| Continuous deployment | Push to `main` auto-deploys to dev; staging/prod are manual promotions |
+| CI on every commit | Lint + type-check + test + build runs on every PR |
+| Continuous deployment | Push to `main` auto-deploys to ci; staging/prod are manual promotions |
 
 ---
 
@@ -36,36 +36,42 @@ Rules:
 
 ## Pipeline overview
 
+The deploy pipeline itself (Railway deploy per service, health checks, step summary, PR comment and label) is the shared reusable workflow in [power-tester/deploy-workflows](https://github.com/power-tester/deploy-workflows), pinned to `@v1`. The workflows in this repository are thin callers that supply the environment, the services and the token.
+
 ```
 PR opened
-  └── ci.yml
+  └── pr.yml
         ├── Lint (ESLint)
         ├── Type-check (tsc --noEmit)
         ├── Test (Vitest)
         └── Build (feature-flags → server → client)
 
 Push to main (PR merged)
-  └── deploy-dev.yml
-        └── _deploy.yml (reusable)
-              ├── npm install
-              ├── Build all packages
-              ├── curl RENDER_DEV_SERVER_HOOK
-              ├── curl RENDER_DEV_CLIENT_HOOK
-              ├── Health-check both URLs
-              └── GitHub Step Summary
+  ├── deploy-ci.yml
+  │     └── deploy-workflows/deploy.yml@v1 (environment: ci)
+  │           ├── railway up — server and client, from source, in parallel
+  │           ├── Health-check SERVER_URL/health and CLIENT_URL/
+  │           ├── GitHub Step Summary
+  │           └── Comment on + label the merged PR ("deployed: ci")
+  └── build-image.yml
+        ├── Build server + client images → ghcr.io, tagged sha-<short> and latest
+        └── Refresh the image_tag dropdown in deploy-staging.yml / deploy-production.yml
 
 Manual trigger (staging)
   └── deploy-staging.yml
-        ├── Accept commit SHA input (default: latest main)
-        ├── Post "deploying" comment on any open PRs
-        └── _deploy.yml → Render staging hooks
+        ├── Inputs: image_tag (dropdown of recent builds, or "(build from source)") + sha
+        ├── resolve-deploy-inputs@v1 — normalize the inputs to a clean tag or SHA
+        └── deploy-workflows/deploy.yml@v1 (environment: staging)
 
 Manual trigger + approval (production)
   └── deploy-production.yml
-        ├── Require "production" environment approval
-        ├── _deploy.yml → Render production hooks
-        └── Create GitHub Release with auto-generated notes
+        ├── Same inputs as staging, plus release_notes
+        ├── resolve-deploy-inputs@v1
+        ├── deploy-workflows/deploy.yml@v1 (environment: production) ← required reviewer gate
+        └── Create GitHub Release (v<date>-<short-sha>)
 ```
+
+See [RAILWAY_DEPLOYMENT.md](RAILWAY_DEPLOYMENT.md) for the Railway setup and the source-vs-image deploy strategies.
 
 ---
 
@@ -76,47 +82,41 @@ Feature complete
     ↓
 Open PR → CI passes → Code review → Merge to main
     ↓
-Auto-deploy to dev (NODE_ENV=development, 7 flags on)
+Auto-deploy to ci (NODE_ENV=ci, 7 flags on) + images published to GHCR
     ↓
-QA on dev — flag the commit SHA
+QA on ci — note the image tag (sha-<short>) from the PR comment or build summary
     ↓
-Manual: deploy-staging.yml (input SHA) → staging (NODE_ENV=staging, 4 flags on)
+Manual: deploy-staging.yml (pick the image tag) → staging (NODE_ENV=staging, 4 flags on)
     ↓
 Stakeholder sign-off
     ↓
-Manual + approval: deploy-production.yml → production (NODE_ENV=production, 2 flags on)
+Manual + approval: deploy-production.yml (same image tag) → production (NODE_ENV=production, 2 flags on)
     ↓
-Turn on flag in flags.production.json → merge → auto-deploy-dev → promote to prod
+Turn on flag in flags.production.json → merge → auto-deploy to ci → promote to prod
 ```
+
+Promoting the same pre-built image through staging and production means the bytes that were tested are the bytes that ship. "(build from source)" with a SHA is the fallback when no image exists for the commit.
 
 ---
 
 ## Releasing a feature
 
-When a feature is fully validated in staging, releasing it to production is just a JSON change:
+When a feature is fully validated in staging, releasing it to production is just a JSON change. The per-environment files are overlays on `flags.default.json`, so they only list the flags that differ from the default:
 
 ```json
 // feature-flags/src/config/flags.production.json
-{
-  "TASK_LABELS": true,
-  "NOTIFICATIONS": true,
-  "TASK_PRIORITY": false,   // ← was false
-  "TASK_COMMENTS": false
-}
+{}
 ```
 
 Change to:
 
 ```json
 {
-  "TASK_LABELS": true,
-  "NOTIFICATIONS": true,
-  "TASK_PRIORITY": true,    // ← now true
-  "TASK_COMMENTS": false
+  "TASK_PRIORITY": { "enabled": true }
 }
 ```
 
-Merge the PR → dev auto-deploys → promote to staging → approve production. No code changes, no feature branch merges.
+Merge the PR → ci auto-deploys → promote to staging → approve production. No code changes, no feature branch merges.
 
 ---
 
@@ -125,13 +125,15 @@ Merge the PR → dev auto-deploys → promote to staging → approve production.
 ### Revert a bad deploy (code bug)
 ```bash
 git revert <bad-commit-sha>
-# Opens a PR, CI runs, merge → auto-deploys to dev → promote
+# Opens a PR, CI runs, merge → auto-deploys to ci → promote
 ```
+
+Or re-run `deploy-staging.yml` / `deploy-production.yml` with the previous image tag: the dropdown keeps the last ten builds, so rolling back is a redeploy, not a rebuild.
 
 ### Disable a feature instantly (flag kill-switch)
 ```json
 // flags.production.json — set to false
-{ "TASK_PRIORITY": false }
+{ "TASK_PRIORITY": { "enabled": false } }
 ```
 Merge and promote. The feature disappears without a code rollback.
 
@@ -139,20 +141,24 @@ Merge and promote. The feature disappears without a code rollback.
 
 ## Environment variable reference
 
-| Variable   | dev               | staging             | production           |
+| Variable   | ci                | staging             | production           |
 | ---------- | ----------------- | ------------------- | -------------------- |
-| `NODE_ENV` | `development`     | `staging`           | `production`         |
+| `NODE_ENV` | `ci`              | `staging`           | `production`         |
 | `PORT`     | `4000`            | `4000`              | `4000`               |
 | Flags on   | 7 of 9            | 4 of 9              | 2 of 9               |
+
+Locally, `NODE_ENV=development` turns all 9 flags on. In Railway these values come from the dotenv-vault entry that each environment's `DOTENV_KEY` unlocks; see [RAILWAY_DEPLOYMENT.md](RAILWAY_DEPLOYMENT.md).
 
 ---
 
 ## GitHub Environments setup
 
 1. Go to **Settings → Environments** in your repo
-2. Create three environments: `development`, `staging`, `production`
+2. Create three environments: `ci`, `staging`, `production`
 3. Add a **Required reviewer** to `production`
-4. Add the `API_URL` and `APP_URL` variables per environment
-5. Add all secrets (`*_MONGODB_URI`, `*_JWT_SECRET`, Render hooks) to the repo-level secrets
+4. Per environment, add the secret `RAILWAY_TOKEN` (a Railway project token scoped to that Railway environment)
+5. Per environment, add the variables `SERVER_URL` and `CLIENT_URL` (the Railway public domains; used for the health checks and the PR comment link)
 
-The `deploy-production.yml` workflow references the `production` environment, which triggers the approval gate before any deploy steps run.
+Application secrets (`MONGODB_URI`, `JWT_SECRET`, …) are not GitHub secrets: they live encrypted in `.env.vault` and are unlocked at runtime by the `DOTENV_KEY` set in Railway.
+
+The `deploy-production.yml` workflow passes `environment: production` to the shared deploy workflow. Only the deploy job declares the environment, so the required reviewer gates the Railway deploy itself, not the summary or PR comment jobs around it.

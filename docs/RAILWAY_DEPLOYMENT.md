@@ -20,7 +20,7 @@ The client is a static React app served by nginx, which proxies `/api` requests 
 | Workflow | Trigger | Target |
 |---|---|---|
 | `deploy-ci.yml` | Every merge to `main` | Railway `ci` environment |
-| `deploy-staging.yml` | Manual (`workflow_dispatch`) + optional SHA | Railway `staging` environment |
+| `deploy-staging.yml` | Manual (`workflow_dispatch`) + image tag or SHA | Railway `staging` environment |
 | `deploy-production.yml` | Manual (`workflow_dispatch`) + reviewer approval | Railway `production` environment |
 
 ---
@@ -171,7 +171,7 @@ Railway supports **Environments** within a single project. Use this to maintain 
 
 ## Step 7 — GitHub Actions Setup
 
-Subsequent deploys after the first are handled automatically by GitHub Actions. The reusable workflow (`.github/workflows/_deploy.yml`) calls the Railway CLI to trigger a deploy — no local build steps run in CI; Railway builds the Docker image itself.
+Subsequent deploys after the first are handled automatically by GitHub Actions. The shared reusable workflow ([power-tester/deploy-workflows](https://github.com/power-tester/deploy-workflows), called from each `deploy-*.yml`) calls the Railway CLI to trigger a deploy — no local build steps run in CI; Railway builds the Docker image itself.
 
 ### Step 7a — Create a Railway Token
 
