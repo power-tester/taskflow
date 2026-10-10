@@ -82,7 +82,7 @@ jobs:
 
       - name: Build & push server image
         if: steps.check_existing.outputs.exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: packages/server/Dockerfile
@@ -96,7 +96,7 @@ jobs:
 
       - name: Build & push client image
         if: steps.check_existing.outputs.exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: packages/client/Dockerfile
