@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -154,7 +154,7 @@ jobs:
         # See docs/GITHUB_APP_SERVICE_TOKEN.md for setup instructions and rationale.
 
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           token: ${{ steps.app-token.outputs.token }}

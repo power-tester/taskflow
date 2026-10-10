@@ -38,7 +38,7 @@ jobs:
       image_tag: ${{ steps.resolve.outputs.image_tag }}
     steps:
       # fetch-depth: 0 so resolve-deploy-inputs can rev-parse a short SHA from a sha-* tag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
@@ -87,7 +87,7 @@ jobs:
           # Org-level, scoped to selected repositories.
           app-id: ${{ vars.WORKFLOW_APP_ID }}
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.sha }}
       - name: Generate tag name
