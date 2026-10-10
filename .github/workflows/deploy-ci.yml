@@ -22,10 +22,6 @@ jobs:
     with:
       environment: ci
       railway_env: ci
-      # The Railway services in the ci environment are named plainly, not by the
-      # <repo>-<service>-<env> convention the shared workflow assumes. The
-      # environment is already implied by the Railway environment itself.
-      service_names: '{"server":"server","client":"client"}'
       # server and client have no ordering relationship, so deploy them concurrently.
       max_parallel: 2
     secrets:
