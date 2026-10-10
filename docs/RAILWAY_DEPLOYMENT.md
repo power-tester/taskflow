@@ -10,10 +10,12 @@ TaskFlow deploys as two Railway services within the same project and in a chosen
 
 | Service | Dockerfile target | Port |
 |---|---|---|
-| `taskflow-server` | `packages/server/Dockerfile` → `production` | 4000 |
-| `taskflow-client` | `packages/client/Dockerfile` → `production` | 80 |
+| `server` | `packages/server/Dockerfile` → `production` | 4000 |
+| `client` | `packages/client/Dockerfile` → `production` | 80 |
 
-The client is a static React app served by nginx, which proxies `/api` requests to the server via Railway's **private networking** (`taskflow.railway.internal:4000`). No traffic between client and server leaves the Railway network.
+The deploy workflow finds each Railway service by name, so the names above are passed to it as `service_names` in `deploy-ci.yml`. The shared workflow's default naming is `taskflow-<service>-<env>`; an environment whose services still follow that convention needs no `service_names`.
+
+The client is a static React app served by nginx, which proxies `/api` requests to the server via Railway's **private networking** (`server.railway.internal:4000`). No traffic between client and server leaves the Railway network.
 
 **CI/CD pipelines** (`.github/workflows/`) trigger Railway deploys automatically:
 
@@ -50,7 +52,7 @@ At runtime, the server decrypts the vault using a single key you provide:
 
 | Variable | Value | Set on service |
 |---|---|---|
-| `DOTENV_KEY` | The decryption key for the target environment | `taskflow-server` |
+| `DOTENV_KEY` | The decryption key for the target environment | `server` |
 
 To get the key for an environment, run locally:
 
@@ -103,7 +105,7 @@ npx dotenv-vault@latest push production
 ### Networking (Settings → Networking)
 
 - Click **Generate Domain** to give the server its public URL (needed for health checks and external API testing)
-- Note the __Private Networking__ hostname shown — it will be `taskflow.railway.internal`. This is what the client uses to reach the server internally via `BACKEND_URL`
+- Note the __Private Networking__ hostname shown — it will be `server.railway.internal`. This is what the client uses to reach the server internally via `BACKEND_URL`
 
 ---
 
@@ -124,10 +126,10 @@ npx dotenv-vault@latest push production
 
 | Variable | Value |
 |---|---|
-| `BACKEND_URL` | `http://taskflow.railway.internal:4000` |
+| `BACKEND_URL` | `http://server.railway.internal:4000` |
 | `PORT` | `80` |
 
-> __Important:__ Use the private networking hostname (`taskflow.railway.internal`), not the public URL. This keeps traffic inside Railway's network and avoids latency and egress costs.
+> __Important:__ Use the private networking hostname (`server.railway.internal`), not the public URL. This keeps traffic inside Railway's network and avoids latency and egress costs.
 > The nginx startup script reads the container's DNS resolver automatically and substitutes `BACKEND_URL` at runtime — no rebuild is needed when this value changes.
 > __`PORT` must be set to `80`__ — Railway uses the `PORT` variable to determine which port the container listens on. The client (nginx) listens on port 80, so without this Railway cannot route incoming traffic to the service correctly.
 
